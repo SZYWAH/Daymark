@@ -1077,6 +1077,7 @@ function CodexReviewWorkbench({
               { value: "claude", label: "Claude Code" },
             ]}
             onChange={(value) => setSourceFilter(value as "all" | ConversationSourceKind)}
+            triggerClassName="h-9 px-2.5 text-xs"
           />
         </label>
         <label className="space-y-0.5 text-[11px] text-ink/42">

@@ -16,6 +16,7 @@ type SelectMenuProps = {
   placeholder?: string;
   searchable?: boolean;
   disabled?: boolean;
+  triggerClassName?: string;
 };
 
 export function SelectMenu({
@@ -25,6 +26,7 @@ export function SelectMenu({
   placeholder = "请选择",
   searchable = false,
   disabled = false,
+  triggerClassName = "",
 }: SelectMenuProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -239,7 +241,7 @@ export function SelectMenu({
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-activedescendant={activeOptionId}
-        className="field-control flex h-10 w-full items-center justify-between gap-2 px-3 text-left text-sm shadow-sm hover:border-copper/35 hover:bg-copper/10 disabled:cursor-not-allowed disabled:opacity-60"
+        className={`field-control flex w-full items-center justify-between gap-2 text-left shadow-sm hover:border-copper/35 hover:bg-copper/10 disabled:cursor-not-allowed disabled:opacity-60 ${triggerClassName || "h-10 px-3 text-sm"}`}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
