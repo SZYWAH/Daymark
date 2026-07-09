@@ -220,7 +220,7 @@ export function TodayPage({
         </button>
       }
     >
-      <div className="flex h-full min-h-0 overflow-y-auto px-5 pb-20 pt-10 scrollbar-thin sm:pb-10 lg:pt-[6.25rem]">
+      <div className="flex h-full min-h-0 overflow-y-auto px-5 pb-20 pt-10 scrollbar-thin sm:pb-10 lg:pt-[clamp(9.25rem,21vh,15rem)]">
         <div className="mx-auto flex min-h-full w-full max-w-[660px] flex-col justify-start">
           <TodayComposer value={content} saving={saving} onChange={setContent} onSubmit={submit} />
           {composerMessage && (
