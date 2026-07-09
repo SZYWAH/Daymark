@@ -40,6 +40,7 @@ const FILE_TEXT_MAX_CHARS: usize = 180_000;
 const FILE_TEXT_MAX_BYTES: u64 = 40_000_000;
 const FILE_TEXT_MAX_OFFICE_XML_BYTES: u64 = 12_000_000;
 const IMAGE_DATA_MAX_BYTES: u64 = 20_000_000;
+const DAYMARK_TEXT_FILE_MAX_BYTES: u64 = 50_000_000;
 const QUICK_CAPTURE_HOTZONE_LABEL: &str = "quick-capture-hotzone";
 const QUICK_CAPTURE_PANEL_LABEL: &str = "quick-capture-panel";
 const QUICK_CAPTURE_HOT_WIDTH: u32 = 560;
@@ -318,6 +319,52 @@ fn check_local_path(window: WebviewWindow, path: String) -> PathStatus {
             message: Some(error.to_string()),
         },
     }
+}
+
+#[tauri::command]
+fn write_text_file(window: WebviewWindow, path: String, contents: String) -> Result<(), String> {
+    ensure_main_window(&window)?;
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("文件路径为空。".into());
+    }
+    if contents.as_bytes().len() as u64 > DAYMARK_TEXT_FILE_MAX_BYTES {
+        return Err(format!(
+            "文件内容过大，最多允许约 {} MB。",
+            DAYMARK_TEXT_FILE_MAX_BYTES / 1_000_000
+        ));
+    }
+
+    let path_buf = PathBuf::from(trimmed);
+    if let Some(parent) = path_buf.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|error| format!("无法创建目录：{}", error))?;
+        }
+    }
+    fs::write(&path_buf, contents).map_err(|error| format!("写入文件失败：{}", error))
+}
+
+#[tauri::command]
+fn read_text_file(window: WebviewWindow, path: String) -> Result<String, String> {
+    ensure_main_window(&window)?;
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("文件路径为空。".into());
+    }
+
+    let path_buf = PathBuf::from(trimmed);
+    let metadata = fs::metadata(&path_buf).map_err(|error| format!("无法访问文件：{}", error))?;
+    if !metadata.is_file() {
+        return Err("当前路径不是文件。".into());
+    }
+    if metadata.len() > DAYMARK_TEXT_FILE_MAX_BYTES {
+        return Err(format!(
+            "文件过大，最多允许约 {} MB。",
+            DAYMARK_TEXT_FILE_MAX_BYTES / 1_000_000
+        ));
+    }
+
+    fs::read_to_string(&path_buf).map_err(|error| format!("读取文件失败：{}", error))
 }
 
 #[tauri::command]
@@ -4181,6 +4228,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             check_local_path,
+            write_text_file,
+            read_text_file,
             get_supported_file_analysis_types,
             extract_local_file_text,
             get_supported_vision_types,

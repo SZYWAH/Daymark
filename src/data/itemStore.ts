@@ -45,6 +45,15 @@ const DAILY_REVIEW_DRAFT_STORE = "dailyReviewReplacementDrafts";
 const CONVERSATION_GENERATION_DRAFT_STORE = "conversationGenerationDrafts";
 const MEMORY_DOCUMENT_STORE = "memoryDocuments";
 const MEMORY_PATCH_STORE = "memoryPatchDrafts";
+export const DAYMARK_CORE_BACKUP_SCHEMA = "daymark.core-backup.v1";
+const CORE_BACKUP_STORE_NAMES = [
+  ITEM_STORE,
+  FOLDER_STORE,
+  JOURNAL_STORE,
+  MEMORY_DOCUMENT_STORE,
+  MEMORY_STORE,
+  LINK_STORE,
+] as const;
 
 type ItemPatch = Partial<Omit<Item, "id" | "createdAt" | "updatedAt">>;
 type CreateItemInput = Partial<Omit<Item, "id" | "createdAt" | "updatedAt">>;
@@ -79,6 +88,29 @@ type ApplyMemoryPatchOptions = {
 type SearchOptions = {
   limitPerKind?: number;
   offsetByKind?: Partial<Record<EntityKind, number>>;
+};
+export type DaymarkCoreBackupCounts = {
+  items: number;
+  folders: number;
+  journalEntries: number;
+  memoryDocument: number;
+  memoryCards: number;
+  links: number;
+};
+export type DaymarkCoreBackupPayload = {
+  items: Item[];
+  folders: FolderNode[];
+  journalEntries: JournalEntry[];
+  memoryDocument: MemoryDocument | null;
+  memoryCards: MemoryCard[];
+  links: KnowledgeLink[];
+};
+export type DaymarkCoreBackupV1 = {
+  schema: typeof DAYMARK_CORE_BACKUP_SCHEMA;
+  exportedAt: string;
+  dbVersion: number;
+  payload: DaymarkCoreBackupPayload;
+  counts: DaymarkCoreBackupCounts;
 };
 type LinkStoreForTransaction = {
   index(name: "by-source" | "by-target"): {
@@ -366,6 +398,233 @@ export function getDefaultAiSettings(): AiSettings {
     themeMode: getThemeMode(),
     updatedAt: formatTimestamp(),
   };
+}
+
+export async function exportCoreBackup(): Promise<DaymarkCoreBackupV1> {
+  const [items, folders, journalEntries, memoryDocument, memoryCards, links] = await Promise.all([
+    getItems(),
+    getFolders(),
+    getJournalEntries(),
+    getMemoryDocument(),
+    getMemoryCards(),
+    getKnowledgeLinks(),
+  ]);
+  const payload: DaymarkCoreBackupPayload = {
+    items,
+    folders,
+    journalEntries,
+    memoryDocument,
+    memoryCards,
+    links,
+  };
+
+  return {
+    schema: DAYMARK_CORE_BACKUP_SCHEMA,
+    exportedAt: new Date().toISOString(),
+    dbVersion: DB_VERSION,
+    payload,
+    counts: getCoreBackupCounts(payload),
+  };
+}
+
+export function validateCoreBackup(input: unknown): DaymarkCoreBackupV1 {
+  if (!isRecord(input)) {
+    throw new Error("备份文件格式无效。");
+  }
+  if (input.schema !== DAYMARK_CORE_BACKUP_SCHEMA) {
+    throw new Error("这不是 Daymark 核心备份文件。");
+  }
+  if (typeof input.exportedAt !== "string" || !input.exportedAt.trim()) {
+    throw new Error("备份文件缺少导出时间。");
+  }
+  if (typeof input.dbVersion !== "number" || !Number.isFinite(input.dbVersion)) {
+    throw new Error("备份文件缺少数据库版本。");
+  }
+  if (!isRecord(input.counts)) {
+    throw new Error("备份文件缺少数量摘要 counts。");
+  }
+  if (!isRecord(input.payload)) {
+    throw new Error("备份文件缺少核心数据 payload。");
+  }
+
+  const payload: DaymarkCoreBackupPayload = {
+    items: validateBackupArray<Item>(input.payload.items, "items", validateBackupItem),
+    folders: validateBackupArray<FolderNode>(input.payload.folders, "folders", validateBackupFolder),
+    journalEntries: validateBackupArray<JournalEntry>(
+      input.payload.journalEntries,
+      "journalEntries",
+      validateBackupJournalEntry,
+    ),
+    memoryDocument: validateBackupMemoryDocument(input.payload.memoryDocument),
+    memoryCards: validateBackupArray<MemoryCard>(input.payload.memoryCards, "memoryCards", validateBackupMemoryCard),
+    links: validateBackupArray<KnowledgeLink>(input.payload.links, "links", validateBackupLink),
+  };
+
+  return {
+    schema: DAYMARK_CORE_BACKUP_SCHEMA,
+    exportedAt: input.exportedAt,
+    dbVersion: input.dbVersion,
+    payload,
+    counts: getCoreBackupCounts(payload),
+  };
+}
+
+export async function restoreCoreBackup(input: unknown): Promise<DaymarkCoreBackupCounts> {
+  const backup = validateCoreBackup(input);
+  const db = await getDb();
+  const tx = db.transaction(CORE_BACKUP_STORE_NAMES, "readwrite");
+  const itemStore = tx.objectStore(ITEM_STORE);
+  const folderStore = tx.objectStore(FOLDER_STORE);
+  const journalStore = tx.objectStore(JOURNAL_STORE);
+  const memoryDocumentStore = tx.objectStore(MEMORY_DOCUMENT_STORE);
+  const memoryStore = tx.objectStore(MEMORY_STORE);
+  const linkStore = tx.objectStore(LINK_STORE);
+  const requests: Promise<unknown>[] = [
+    itemStore.clear(),
+    folderStore.clear(),
+    journalStore.clear(),
+    memoryDocumentStore.clear(),
+    memoryStore.clear(),
+    linkStore.clear(),
+  ];
+
+  backup.payload.items.forEach((item) => requests.push(itemStore.put(normalizeItem(item))));
+  backup.payload.folders.forEach((folder) => requests.push(folderStore.put(folder)));
+  backup.payload.journalEntries.forEach((entry) => requests.push(journalStore.put(normalizeJournalEntry(entry))));
+  if (backup.payload.memoryDocument) {
+    requests.push(memoryDocumentStore.put(backup.payload.memoryDocument));
+  }
+  backup.payload.memoryCards.forEach((card) => requests.push(memoryStore.put(card)));
+  backup.payload.links.forEach((link) => requests.push(linkStore.put(link)));
+
+  await Promise.all([...requests, tx.done]);
+  return backup.counts;
+}
+
+function getCoreBackupCounts(payload: DaymarkCoreBackupPayload): DaymarkCoreBackupCounts {
+  return {
+    items: payload.items.length,
+    folders: payload.folders.length,
+    journalEntries: payload.journalEntries.length,
+    memoryDocument: payload.memoryDocument ? 1 : 0,
+    memoryCards: payload.memoryCards.length,
+    links: payload.links.length,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateBackupArray<T>(
+  value: unknown,
+  label: string,
+  validate: (record: Record<string, unknown>, label: string) => void,
+): T[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`备份字段 ${label} 必须是数组。`);
+  }
+  const ids = new Set<string>();
+  value.forEach((record, index) => {
+    const recordLabel = `${label}[${index}]`;
+    if (!isRecord(record)) {
+      throw new Error(`备份字段 ${recordLabel} 必须是对象。`);
+    }
+    const id = requireStringField(record, "id", recordLabel);
+    if (ids.has(id)) {
+      throw new Error(`备份字段 ${label} 包含重复 id：${id}`);
+    }
+    ids.add(id);
+    validate(record, recordLabel);
+  });
+  return value as T[];
+}
+
+function validateBackupItem(record: Record<string, unknown>, label: string) {
+  requireStringField(record, "title", label);
+  requireStringField(record, "type", label);
+  requireStringField(record, "createdAt", label);
+  requireStringField(record, "updatedAt", label);
+  requireOptionalArrayField(record, "tags", label);
+  requireOptionalArrayField(record, "todos", label);
+}
+
+function validateBackupFolder(record: Record<string, unknown>, label: string) {
+  requireStringField(record, "title", label);
+  requireStringField(record, "kind", label);
+  requireNumberField(record, "sortOrder", label);
+  requireStringField(record, "createdAt", label);
+  requireStringField(record, "updatedAt", label);
+}
+
+function validateBackupJournalEntry(record: Record<string, unknown>, label: string) {
+  requireStringField(record, "entryDate", label);
+  requireStringField(record, "content", label);
+  requireArrayField(record, "tags", label);
+  requireArrayField(record, "todos", label);
+  requireStringField(record, "createdAt", label);
+  requireStringField(record, "updatedAt", label);
+}
+
+function validateBackupMemoryDocument(value: unknown): MemoryDocument | null {
+  if (value === null) return null;
+  if (!isRecord(value)) {
+    throw new Error("备份字段 memoryDocument 必须是 null 或对象。");
+  }
+  const id = requireStringField(value, "id", "memoryDocument");
+  if (id !== "main") {
+    throw new Error("备份字段 memoryDocument.id 必须是 main。");
+  }
+  requireStringField(value, "content", "memoryDocument");
+  requireStringField(value, "createdAt", "memoryDocument");
+  requireStringField(value, "updatedAt", "memoryDocument");
+  return value as MemoryDocument;
+}
+
+function validateBackupMemoryCard(record: Record<string, unknown>, label: string) {
+  requireStringField(record, "title", label);
+  requireStringField(record, "content", label);
+  requireStringField(record, "category", label);
+  requireStringField(record, "status", label);
+  requireStringField(record, "createdAt", label);
+  requireStringField(record, "updatedAt", label);
+}
+
+function validateBackupLink(record: Record<string, unknown>, label: string) {
+  requireStringField(record, "sourceKind", label);
+  requireStringField(record, "sourceId", label);
+  requireStringField(record, "targetKind", label);
+  requireStringField(record, "targetId", label);
+  requireStringField(record, "relation", label);
+  requireStringField(record, "createdAt", label);
+}
+
+function requireStringField(record: Record<string, unknown>, field: string, label: string) {
+  const value = record[field];
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`备份字段 ${label}.${field} 必须是非空字符串。`);
+  }
+  return value;
+}
+
+function requireNumberField(record: Record<string, unknown>, field: string, label: string) {
+  const value = record[field];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`备份字段 ${label}.${field} 必须是数字。`);
+  }
+  return value;
+}
+
+function requireArrayField(record: Record<string, unknown>, field: string, label: string) {
+  if (!Array.isArray(record[field])) {
+    throw new Error(`备份字段 ${label}.${field} 必须是数组。`);
+  }
+}
+
+function requireOptionalArrayField(record: Record<string, unknown>, field: string, label: string) {
+  if (record[field] !== undefined && !Array.isArray(record[field])) {
+    throw new Error(`备份字段 ${label}.${field} 必须是数组。`);
+  }
 }
 
 export async function seedItemsIfEmpty() {

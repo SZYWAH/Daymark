@@ -95,6 +95,46 @@ export async function pickLocalFolder() {
   return Array.isArray(selected) ? selected[0] : selected ?? undefined;
 }
 
+export async function saveTextFileWithDialog(options: {
+  title: string;
+  defaultPath: string;
+  contents: string;
+  filters?: Array<{ name: string; extensions: string[] }>;
+}) {
+  if (!isDesktopRuntime()) return undefined;
+
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const selected = await save({
+    title: options.title,
+    defaultPath: options.defaultPath,
+    filters: options.filters,
+  });
+  if (!selected) return undefined;
+
+  await invoke("write_text_file", { path: selected, contents: options.contents });
+  return selected;
+}
+
+export async function readTextFileWithDialog(options: {
+  title: string;
+  filters?: Array<{ name: string; extensions: string[] }>;
+}) {
+  if (!isDesktopRuntime()) return undefined;
+
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    title: options.title,
+    multiple: false,
+    directory: false,
+    filters: options.filters,
+  });
+  const path = Array.isArray(selected) ? selected[0] : selected;
+  if (!path) return undefined;
+
+  const contents = await invoke<string>("read_text_file", { path });
+  return { path, contents };
+}
+
 export async function checkLocalPath(path: string): Promise<PathStatus> {
   const value = path.trim();
   if (!value) return { exists: false, message: "路径为空" };

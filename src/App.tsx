@@ -60,7 +60,10 @@ import {
   getTodayDashboardData,
   markItemOpened,
   replaceConversationSessionIndex,
+  restoreCoreBackup,
   saveAiSettings,
+  type DaymarkCoreBackupCounts,
+  type DaymarkCoreBackupV1,
   updateCodexDailyReview,
   updateDailyReviewReplacementDraft,
   updateFolder,
@@ -430,6 +433,17 @@ function trimSentenceEnd(value: string) {
 
 function countCharacters(value: string) {
   return Array.from(value).length;
+}
+
+function formatCoreBackupCounts(counts: DaymarkCoreBackupCounts) {
+  return [
+    `${counts.items} 条资料`,
+    `${counts.folders} 个目录`,
+    `${counts.journalEntries} 篇日记`,
+    `${counts.memoryDocument} 份记忆文档`,
+    `${counts.memoryCards} 张记忆卡片`,
+    `${counts.links} 个链接`,
+  ].join(" / ");
 }
 
 function hasRedactionWarning(warnings: string[]) {
@@ -947,6 +961,39 @@ export default function App() {
     setSearchRefreshKey((key) => key + 1);
   };
 
+  const refreshCoreBackupData = async () => {
+    const dashboardSeq = nextTodayDashboardSeq();
+    const memorySharedSeq = nextMemorySharedSeq();
+    const [
+      loadedItems,
+      loadedFolders,
+      loadedJournal,
+      loadedMemories,
+      loadedMemoryDocument,
+      loadedLinks,
+      loadedDashboard,
+    ] = await Promise.all([
+      getItems(),
+      getFolders(),
+      getJournalEntries(),
+      getMemoryCards(),
+      getMemoryDocument(),
+      getKnowledgeLinks(),
+      getTodayDashboardData(),
+    ]);
+    setItems(loadedItems);
+    setFolders(loadedFolders);
+    setJournalEntries(loadedJournal);
+    if (memorySharedSeqRef.current === memorySharedSeq) {
+      setMemoryCards(loadedMemories);
+      setMemoryDocument(loadedMemoryDocument);
+    }
+    setLinks(loadedLinks);
+    applyTodayDashboardIfCurrent(dashboardSeq, loadedDashboard);
+    setSelectedId("");
+    setSearchRefreshKey((key) => key + 1);
+  };
+
   const currentFolderId = activeView.kind === "folder" ? activeView.folderId : selectedItem?.folderId;
   const libraryViewActive = activeView.kind === "smart" || activeView.kind === "folder" || activeView.kind === "item";
 
@@ -1238,6 +1285,32 @@ export default function App() {
     setSettings(saved);
     applyThemeMode(saved.themeMode);
   };
+
+  const handleRestoreCoreBackup = async (backup: DaymarkCoreBackupV1) =>
+    new Promise<DaymarkCoreBackupCounts | null>((resolve, reject) => {
+      setPendingConfirm({
+        title: "恢复核心备份",
+        message: `这会覆盖当前的资料、目录、日记、记忆和链接。\n\n备份内容：${formatCoreBackupCounts(backup.counts)}。\n\nAI 设置、API Key、主题和布局不会被改写。`,
+        confirmLabel: "覆盖恢复",
+        danger: true,
+        onCancel: () => resolve(null),
+        onConfirm: async () => {
+          try {
+            const counts = await restoreCoreBackup(backup);
+            await refreshCoreBackupData();
+            setActiveView({ kind: "settings" });
+            setSelectedId("");
+            setDraft(null);
+            setTagText("");
+            setIsEditing(false);
+            setError("");
+            resolve(counts);
+          } catch (error) {
+            reject(error);
+          }
+        },
+      });
+    });
 
   const handleStartEdit = () => {
     if (!selectedItem) return;
@@ -2275,6 +2348,7 @@ export default function App() {
                 settings={settings}
                 onSave={handleSaveSettings}
                 onDirtyChange={setSettingsDirty}
+                onRestoreCoreBackup={handleRestoreCoreBackup}
               />
             ) : (
               <section className="workspace-surface">

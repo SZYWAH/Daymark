@@ -2,6 +2,7 @@ import {
   Bot,
   CheckCircle2,
   Database,
+  Download,
   Moon,
   FolderSearch,
   HardDrive,
@@ -11,12 +12,24 @@ import {
   ShieldCheck,
   Sun,
   Monitor,
+  Upload,
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { getEffectiveAiSettings, getProviderLabel, hasEnvApiKey, testAiConnection } from "../ai/deepseek";
-import { isDesktopRuntime, probeConversationSources } from "../lib/desktop";
+import {
+  isDesktopRuntime,
+  probeConversationSources,
+  readTextFileWithDialog,
+  saveTextFileWithDialog,
+} from "../lib/desktop";
+import {
+  exportCoreBackup,
+  validateCoreBackup,
+  type DaymarkCoreBackupCounts,
+  type DaymarkCoreBackupV1,
+} from "../data/itemStore";
 import { applyThemeMode } from "../lib/theme";
 import { PageWorkspace } from "./PageWorkspace";
 import { ResultRow, ScrollableResultPanel } from "./ResultPanels";
@@ -27,6 +40,7 @@ type SettingsPanelProps = {
   settings: AiSettings;
   onSave: (settings: AiSettings) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
+  onRestoreCoreBackup: (backup: DaymarkCoreBackupV1) => Promise<DaymarkCoreBackupCounts | null>;
 };
 
 function normalizeSettingsForDirty(settings: AiSettings) {
@@ -49,17 +63,19 @@ function hasNonThemeSettingsChanges(draft: AiSettings, settings: AiSettings) {
   return JSON.stringify(draftWithoutTheme) !== JSON.stringify(settingsWithoutTheme);
 }
 
-export function SettingsPanel({ settings, onSave, onDirtyChange }: SettingsPanelProps) {
+export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBackup }: SettingsPanelProps) {
   const [draft, setDraft] = useState(settings);
   const [saving, setSaving] = useState(false);
   const [themeSaving, setThemeSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [backupBusy, setBackupBusy] = useState<"export" | "restore" | null>(null);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"ok" | "error" | "info">("info");
   const themeSaveSeqRef = useRef(0);
   const themeSavingRef = useRef(false);
   const savingRef = useRef(false);
   const testingRef = useRef(false);
+  const backupInputRef = useRef<HTMLInputElement | null>(null);
   const envKeyAvailable = hasEnvApiKey();
   const effective = useMemo(() => getEffectiveAiSettings(draft), [draft]);
   const dirty = useMemo(
@@ -96,6 +112,104 @@ export function SettingsPanel({ settings, onSave, onDirtyChange }: SettingsPanel
     } finally {
       savingRef.current = false;
       setSaving(false);
+    }
+  };
+
+  const exportBackup = async () => {
+    if (backupBusy) return;
+    setBackupBusy("export");
+    setMessage("");
+
+    try {
+      const backup = await exportCoreBackup();
+      const fileName = getCoreBackupFileName();
+      const contents = `${JSON.stringify(backup, null, 2)}\n`;
+      if (isDesktopRuntime()) {
+        const savedPath = await saveTextFileWithDialog({
+          title: "导出 Daymark 核心备份",
+          defaultPath: fileName,
+          contents,
+          filters: [{ name: "JSON", extensions: ["json"] }],
+        });
+        if (!savedPath) {
+          setMessageType("info");
+          setMessage("已取消导出。");
+          return;
+        }
+      } else {
+        downloadTextFile(fileName, contents);
+      }
+      setMessageType("ok");
+      setMessage(`核心备份已导出：${formatCoreBackupCounts(backup.counts)}。`);
+    } catch (error) {
+      setMessageType("error");
+      setMessage(error instanceof Error ? error.message : "导出核心备份失败。");
+    } finally {
+      setBackupBusy(null);
+    }
+  };
+
+  const startRestoreBackup = async () => {
+    if (backupBusy) return;
+    setMessage("");
+
+    if (!isDesktopRuntime()) {
+      backupInputRef.current?.click();
+      return;
+    }
+
+    setBackupBusy("restore");
+    try {
+      const selected = await readTextFileWithDialog({
+        title: "选择 Daymark 核心备份",
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!selected) {
+        setMessageType("info");
+        setMessage("已取消恢复。");
+        return;
+      }
+      await restoreBackupFromText(selected.contents);
+    } catch (error) {
+      setMessageType("error");
+      setMessage(error instanceof Error ? error.message : "恢复核心备份失败。");
+    } finally {
+      setBackupBusy(null);
+    }
+  };
+
+  const restoreBackupFromText = async (contents: string) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents);
+    } catch {
+      throw new Error("备份文件不是有效的 JSON。");
+    }
+    const backup = validateCoreBackup(parsed);
+    setMessageType("info");
+    setMessage(`已读取备份：${formatCoreBackupCounts(backup.counts)}。请确认是否覆盖恢复。`);
+    const restored = await onRestoreCoreBackup(backup);
+    if (!restored) {
+      setMessageType("info");
+      setMessage("已取消恢复。");
+      return;
+    }
+    setMessageType("ok");
+    setMessage(`核心备份已恢复：${formatCoreBackupCounts(restored)}。`);
+  };
+
+  const handleBrowserBackupFileSelected = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setBackupBusy("restore");
+    try {
+      await restoreBackupFromText(await file.text());
+    } catch (error) {
+      setMessageType("error");
+      setMessage(error instanceof Error ? error.message : "恢复核心备份失败。");
+    } finally {
+      setBackupBusy(null);
     }
   };
 
@@ -218,6 +332,46 @@ export function SettingsPanel({ settings, onSave, onDirtyChange }: SettingsPanel
                 </button>
               );
             })}
+          </div>
+        </div>
+
+        <div className="section-surface space-y-4 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Backup</p>
+              <h3 className="mt-1 text-base font-semibold text-ink">数据备份</h3>
+              <p className="mt-1 text-sm leading-6 text-ink/52">
+                导出资料、目录、日记、记忆和链接；不会导出 AI 设置、API Key、草稿或历史总结报告。
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                className="secondary-action flex h-10 items-center gap-2 px-4 text-xs"
+                disabled={Boolean(backupBusy)}
+                onClick={exportBackup}
+              >
+                {backupBusy === "export" ? <RefreshCw size={16} className="animate-spin" /> : <Download size={16} />}
+                {backupBusy === "export" ? "导出中" : "导出核心备份"}
+              </button>
+              <button
+                className="secondary-action flex h-10 items-center gap-2 px-4 text-xs"
+                disabled={Boolean(backupBusy)}
+                onClick={startRestoreBackup}
+              >
+                {backupBusy === "restore" ? <RefreshCw size={16} className="animate-spin" /> : <Upload size={16} />}
+                {backupBusy === "restore" ? "恢复中" : "恢复核心备份"}
+              </button>
+              <input
+                ref={backupInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={handleBrowserBackupFileSelected}
+              />
+            </div>
+          </div>
+          <div className="rounded-[8px] border border-line bg-panel/70 p-3 text-xs leading-5 text-ink/52">
+            恢复会在确认后覆盖当前核心内容。主题、布局、AI 设置和手动 API Key 会保留在本机，不会被备份文件改写。
           </div>
         </div>
 
@@ -402,6 +556,35 @@ export function SettingsPanel({ settings, onSave, onDirtyChange }: SettingsPanel
       </div>
     </PageWorkspace>
   );
+}
+
+function getCoreBackupFileName(date = new Date()) {
+  return `daymark-core-backup-${date.toISOString().slice(0, 10)}.json`;
+}
+
+function formatCoreBackupCounts(counts: DaymarkCoreBackupCounts) {
+  const parts = [
+    `${counts.items} 条资料`,
+    `${counts.folders} 个目录`,
+    `${counts.journalEntries} 篇日记`,
+    `${counts.memoryDocument} 份记忆文档`,
+    `${counts.memoryCards} 张记忆卡片`,
+    `${counts.links} 个链接`,
+  ];
+  return parts.join(" / ");
+}
+
+function downloadTextFile(fileName: string, contents: string) {
+  const blob = new Blob([contents], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function BuildInfo() {
