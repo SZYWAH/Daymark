@@ -17,7 +17,9 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getEffectiveAiSettings, streamSummarizeConversationReview, type CodexReviewProgress } from "../ai/deepseek";
+import { ConversationSessionPreviewOverlay } from "./ConversationSessionPreviewOverlay";
 import { DatePickerPopover } from "./DatePickerPopover";
+import { FocusOverlay } from "./FocusOverlay";
 import { MetricItem, PageMetricColumn, PageWorkspace } from "./PageWorkspace";
 import { BoundedPreview, ResultRow, ScrollableResultPanel } from "./ResultPanels";
 import { SelectMenu } from "./SelectMenu";
@@ -1250,169 +1252,6 @@ function CodexReviewWorkbench({
   );
 }
 
-function ConversationSessionPreviewOverlay({
-  sessions,
-  selectedIds,
-  onToggleSession,
-  onClose,
-}: {
-  sessions: CodexSessionIndex[];
-  selectedIds: Set<string>;
-  onToggleSession: (id: string) => void;
-  onClose: () => void;
-}) {
-  const [sourceFilter, setSourceFilter] = useState<"all" | ConversationSourceKind>("all");
-  const [dateQuery, setDateQuery] = useState("");
-  const [keyword, setKeyword] = useState("");
-  const [previewingId, setPreviewingId] = useState("");
-  const [previewText, setPreviewText] = useState("");
-  const [previewMeta, setPreviewMeta] = useState("");
-  const [message, setMessage] = useState("");
-  const previewRequestSeqRef = useRef(0);
-
-  const filtered = useMemo(() => {
-    const normalized = keyword.trim().toLowerCase();
-    return sessions.filter((session) => {
-      if (sourceFilter !== "all" && session.sourceKind !== sourceFilter) return false;
-      if (dateQuery && !session.date.includes(dateQuery)) return false;
-      if (!normalized) return true;
-      return [session.title, session.preview, session.path, session.cwd, session.sourceLabel]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(normalized);
-    });
-  }, [dateQuery, keyword, sessions, sourceFilter]);
-
-  const openPreview = async (session: CodexSessionIndex) => {
-    const requestSeq = previewRequestSeqRef.current + 1;
-    previewRequestSeqRef.current = requestSeq;
-    setPreviewingId(session.id);
-    setMessage("");
-    setPreviewText("");
-    setPreviewMeta("");
-    try {
-      const input = await readSelectedConversationSessions([session.id], createClientJobId());
-      if (previewRequestSeqRef.current !== requestSeq) return;
-      setPreviewText(input.transcriptChunks.join("\n\n"));
-      setPreviewMeta(
-        `${session.sourceLabel} · ${session.date} · ${input.totalChars.toLocaleString("zh-CN")} 字符${
-          input.redacted ? " · 已脱敏" : ""
-        }${input.truncated ? " · 已截断" : ""}`,
-      );
-    } catch (error) {
-      if (previewRequestSeqRef.current !== requestSeq) return;
-      setMessage(getSafeErrorMessage(error, "读取会话预览失败。"));
-    } finally {
-      if (previewRequestSeqRef.current === requestSeq) setPreviewingId("");
-    }
-  };
-
-  const copyPreviewText = async () => {
-    if (!previewText) return;
-    setMessage("");
-    try {
-      await navigator.clipboard?.writeText(previewText);
-      setMessage("已复制会话正文预览。");
-    } catch (error) {
-      setMessage(getSafeErrorMessage(error, "复制失败，请稍后再试。"));
-    }
-  };
-
-  return (
-    <FocusOverlay title="会话列表预览" onClose={onClose}>
-      <div className="mb-3 rounded-[8px] border border-line bg-panel/70 p-3 text-xs leading-5 text-ink/52">
-        这里只做本机只读预览：点击单个会话后才读取正文，先脱敏再显示；不会保存、不会上传，也不会触发 AI。
-      </div>
-
-      <div className="mb-3 grid gap-2 lg:grid-cols-[180px_160px_minmax(0,1fr)]">
-        <SelectMenu
-          value={sourceFilter}
-          options={[
-            { value: "all", label: "全部来源" },
-            { value: "codex", label: "Codex" },
-            { value: "claude", label: "Claude Code" },
-          ]}
-          onChange={(value) => setSourceFilter(value as "all" | ConversationSourceKind)}
-          triggerClassName="h-9 px-2 text-xs shadow-none"
-        />
-        <input
-          value={dateQuery}
-          onChange={(event) => setDateQuery(event.target.value)}
-          className="field-control h-9 px-2 text-xs"
-          placeholder="日期，如 2026-07"
-        />
-        <input
-          value={keyword}
-          onChange={(event) => setKeyword(event.target.value)}
-          className="field-control h-9 px-2 text-xs"
-          placeholder="搜索标题、路径、预览"
-        />
-      </div>
-
-      <div className="grid h-[min(70vh,720px)] min-h-0 overflow-hidden gap-4 lg:grid-cols-[minmax(300px,0.82fr)_minmax(0,1.18fr)]">
-        <ScrollableResultPanel
-          fill
-          title="会话列表"
-          count={`${filtered.length} 条`}
-          bodyClassName="space-y-2"
-        >
-          {filtered.map((session) => {
-            const selected = selectedIds.has(session.id);
-            return (
-              <ResultRow key={`${session.id}-${session.path}`} selected={selected}>
-                <div className="mb-2 flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="truncate text-anywhere text-sm font-semibold text-ink">{session.title}</h4>
-                      <span className="quiet-chip py-0.5 text-[11px] text-ink/45">{session.sourceLabel}</span>
-                    </div>
-                    <p className="mt-1 truncate text-anywhere text-xs text-ink/45">{session.path}</p>
-                  </div>
-                  <span className="shrink-0 text-[11px] text-ink/42">{session.date}</span>
-                </div>
-                <BoundedPreview maxLinesClass="line-clamp-2" className="text-xs leading-5 text-ink/54">
-                  {session.preview}
-                </BoundedPreview>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button className="soft-button h-7 px-2 text-[11px]" onClick={() => onToggleSession(session.id)}>
-                    {selected ? "取消勾选" : "勾选"}
-                  </button>
-                  <button className="soft-button h-7 px-2 text-[11px]" disabled={previewingId === session.id} onClick={() => void openPreview(session)}>
-                    {previewingId === session.id ? "读取中" : "只读预览"}
-                  </button>
-                </div>
-              </ResultRow>
-            );
-          })}
-          {filtered.length === 0 && (
-            <div className="p-5 text-center text-sm text-ink/45">没有符合筛选条件的会话。</div>
-          )}
-        </ScrollableResultPanel>
-
-        <ScrollableResultPanel
-          fill
-          title="会话正文预览"
-          status={previewMeta || "选择左侧会话后显示。"}
-          actions={
-            previewText ? (
-              <button className="soft-button h-8 px-2.5 text-xs" onClick={() => void copyPreviewText()}>
-                复制
-              </button>
-            ) : undefined
-          }
-          bodyClassName="flex flex-col gap-3"
-        >
-          {message && <div className="shrink-0 rounded-[8px] border border-line bg-panel p-3 text-xs leading-5 text-anywhere text-ink/70">{message}</div>}
-          <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface p-4 text-anywhere text-xs leading-6 text-ink/66 scrollbar-thin">
-            {previewText || "还没有打开任何会话正文。"}
-          </pre>
-        </ScrollableResultPanel>
-      </div>
-    </FocusOverlay>
-  );
-}
-
 function ReviewArchivePanel({
   reports,
   codexReviews,
@@ -2298,41 +2137,6 @@ function LegacyMemorySection({
         </div>
       )}
     </section>
-  );
-}
-
-function FocusOverlay({
-  title,
-  children,
-  onClose,
-}: {
-  title: string;
-  children: ReactNode;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  return (
-    <div className="modal-backdrop">
-      <section aria-label={title} aria-modal="true" className="modal-surface flex max-h-[94vh] w-full max-w-6xl flex-col" role="dialog">
-        <header className="flex items-center justify-between border-b border-line bg-panel/70 px-5 py-3">
-          <h3 className="text-sm font-semibold text-ink">{title}</h3>
-          <button
-            className="flex h-8 w-8 items-center justify-center rounded-[8px] text-ink/45 transition hover:bg-panel hover:text-ink"
-            onClick={onClose}
-          >
-            <X size={16} />
-          </button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin">{children}</div>
-      </section>
-    </div>
   );
 }
 
