@@ -552,6 +552,37 @@ export async function upsertRollingWorkReview(input: RollingWorkReviewInput) {
   return review;
 }
 
+export async function archiveRollingWorkReview(date: string) {
+  const db = await getDb();
+  const current = await db.get(ROLLING_WORK_REVIEW_STORE, date);
+  if (!current || !current.content.trim()) {
+    throw new Error("还没有可归档的自动工作回顾。");
+  }
+
+  const archivedAt = current.archivedAt ?? formatTimestamp();
+  const archiveReview = await upsertDailyConversationReview({
+    reviewKey: createReviewKey(current.date, "auto-work"),
+    date: current.date,
+    reviewKind: "auto-work",
+    sourceLabel: "自动工作回顾",
+    title: current.title.trim() || `${current.date} 自动工作回顾`,
+    content: current.content,
+    sessionCount: current.processedSessionCount,
+    sessionIds: [],
+    sourceReviewIds: [],
+  });
+
+  const updated: RollingWorkReview = {
+    ...current,
+    archivedAt,
+    archiveReviewId: archiveReview.id,
+    updatedAt: formatTimestamp(),
+  };
+  await db.put(ROLLING_WORK_REVIEW_STORE, updated);
+
+  return { review: updated, archiveReview };
+}
+
 export async function exportCoreBackup(): Promise<DaymarkCoreBackupV1> {
   const [items, folders, journalEntries, memoryDocument, memoryCards, links] = await Promise.all([
     getItems(),
@@ -1955,11 +1986,13 @@ function createReviewKey(
   reviewKind: ConversationReviewKind,
   sourceKind?: ConversationSourceKind,
 ) {
-  return `${date}:${reviewKind}:${reviewKind === "combined" ? "combined" : sourceKind ?? "codex"}`;
+  const sourceKey = reviewKind === "combined" || reviewKind === "auto-work" ? reviewKind : sourceKind ?? "codex";
+  return `${date}:${reviewKind}:${sourceKey}`;
 }
 
 function getReviewSourceLabel(reviewKind: ConversationReviewKind, sourceKind?: ConversationSourceKind) {
   if (reviewKind === "combined") return "综合";
+  if (reviewKind === "auto-work") return "自动工作回顾";
   if (sourceKind === "claude") return "Claude Code";
   return "Codex";
 }

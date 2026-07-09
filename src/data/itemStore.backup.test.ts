@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   DAYMARK_CORE_BACKUP_SCHEMA,
+  archiveRollingWorkReview,
   createFolder,
   createItem,
   createJournalEntry,
@@ -9,8 +10,10 @@ import {
   createMemoryCandidate,
   createSummaryReport,
   exportCoreBackup,
+  getCodexDailyReviews,
   getDefaultAiSettings,
   getItems,
+  getRollingWorkReviewByDate,
   restoreCoreBackup,
   saveAiSettings,
   saveAutoWorkReviewSettings,
@@ -154,6 +157,29 @@ describe("core backup", () => {
     expect(items).toHaveLength(1);
     expect(items[0].id).toBe(oldItem.id);
     expect(items[0].title).toBe("Keep me");
+  });
+
+  it("archives rolling work reviews without creating duplicate archive entries", async () => {
+    await upsertRollingWorkReview({
+      date: "2026-07-11",
+      title: "2026-07-11 自动工作回顾",
+      content: "Useful rolling work review.",
+      sourceKinds: ["codex", "claude"],
+      processedSessionCount: 3,
+      processedChars: 512,
+      lastRunAt: NOW,
+      status: "ready",
+    });
+
+    const first = await archiveRollingWorkReview("2026-07-11");
+    const second = await archiveRollingWorkReview("2026-07-11");
+    const savedRolling = await getRollingWorkReviewByDate("2026-07-11");
+    const archiveEntries = (await getCodexDailyReviews()).filter((review) => review.reviewKind === "auto-work" && review.date === "2026-07-11");
+
+    expect(second.archiveReview.id).toBe(first.archiveReview.id);
+    expect(savedRolling?.archiveReviewId).toBe(first.archiveReview.id);
+    expect(archiveEntries).toHaveLength(1);
+    expect(archiveEntries[0].sourceLabel).toBe("自动工作回顾");
   });
 });
 

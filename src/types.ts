@@ -220,7 +220,7 @@ export type TodayDashboardData = {
 };
 
 export type ConversationSourceKind = "codex" | "claude";
-export type ConversationReviewKind = "source" | "combined";
+export type ConversationReviewKind = "source" | "combined" | "auto-work";
 export type ConversationProbeKind = "file" | "directory" | "database";
 export type ReviewDraftStatus = "pending" | "applied" | "ignored";
 export type GenerationDraftStatus = "running" | "cancelled" | "failed" | "completed";
@@ -325,6 +325,8 @@ export type RollingWorkReview = {
   lastRunAt?: string;
   status: RollingWorkReviewStatus;
   message?: string;
+  archivedAt?: string;
+  archiveReviewId?: string;
   createdAt: string;
   updatedAt: string;
 };

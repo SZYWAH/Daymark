@@ -41,6 +41,7 @@ import type {
   MemoryDocument,
   MemoryPatchDraft,
   MemorySubView,
+  RollingWorkReview,
   SummaryReport,
 } from "../types";
 
@@ -71,6 +72,7 @@ type MemoryPageProps = {
   memoryPatchDrafts: MemoryPatchDraft[];
   reports: SummaryReport[];
   codexReviews: CodexDailyReview[];
+  rollingWorkReviews: RollingWorkReview[];
   codexSessionIndex: CodexSessionIndex[];
   dailyReviewDrafts: DailyReviewReplacementDraft[];
   conversationGenerationDrafts: ConversationGenerationDraft[];
@@ -98,6 +100,7 @@ type MemoryPageProps = {
   onUpdateCodexReview: (id: string, patch: Partial<CodexDailyReview>) => Promise<void>;
   onApplyDailyReviewDraft: (id: string) => Promise<void>;
   onIgnoreDailyReviewDraft: (id: string) => Promise<void>;
+  onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
   onSaveMemoryDocument: (content: string, options: MemoryDocumentSaveOptions) => Promise<MemoryDocument>;
   onApplyMemoryPatch: (
     id: string,
@@ -113,6 +116,7 @@ export function MemoryPage({
   memoryPatchDrafts,
   reports,
   codexReviews,
+  rollingWorkReviews,
   codexSessionIndex,
   dailyReviewDrafts,
   conversationGenerationDrafts,
@@ -130,6 +134,7 @@ export function MemoryPage({
   onUpdateCodexReview,
   onApplyDailyReviewDraft,
   onIgnoreDailyReviewDraft,
+  onArchiveRollingWorkReview,
   onSaveMemoryDocument,
   onApplyMemoryPatch,
   onIgnoreMemoryPatch,
@@ -172,7 +177,7 @@ export function MemoryPage({
         <MemorySubViewNav
           active={subView}
           onChange={setSubView}
-          archiveCount={codexReviews.length + reports.length}
+          archiveCount={codexReviews.filter((review) => review.reviewKind !== "auto-work").length + reports.length + rollingWorkReviews.length}
           patchCount={pendingPatchDrafts.length}
           legacyCount={memories.filter((memory) => memory.status !== "ignored").length}
         />
@@ -191,6 +196,7 @@ export function MemoryPage({
               <ReviewArchivePanel
                 reports={reports}
                 codexReviews={codexReviews}
+                rollingWorkReviews={rollingWorkReviews}
                 dailyReviewDrafts={dailyReviewDrafts}
                 targetReviewId={initialReviewId}
                 targetReviewDraftId={initialReviewDraftId}
@@ -200,6 +206,7 @@ export function MemoryPage({
                 onGenerateCombinedReview={onGenerateCombinedReview}
                 onApplyDailyReviewDraft={onApplyDailyReviewDraft}
                 onIgnoreDailyReviewDraft={onIgnoreDailyReviewDraft}
+                onArchiveRollingWorkReview={onArchiveRollingWorkReview}
               />
             </div>
           )}
@@ -1408,6 +1415,7 @@ function ConversationSessionPreviewOverlay({
 function ReviewArchivePanel({
   reports,
   codexReviews,
+  rollingWorkReviews,
   dailyReviewDrafts,
   targetReviewId,
   targetReviewDraftId,
@@ -1417,9 +1425,11 @@ function ReviewArchivePanel({
   onGenerateCombinedReview,
   onApplyDailyReviewDraft,
   onIgnoreDailyReviewDraft,
+  onArchiveRollingWorkReview,
 }: {
   reports: SummaryReport[];
   codexReviews: CodexDailyReview[];
+  rollingWorkReviews: RollingWorkReview[];
   dailyReviewDrafts: DailyReviewReplacementDraft[];
   targetReviewId?: string;
   targetReviewDraftId?: string;
@@ -1433,16 +1443,20 @@ function ReviewArchivePanel({
   ) => Promise<GenerateCodexReviewResult>;
   onApplyDailyReviewDraft: (id: string) => Promise<void>;
   onIgnoreDailyReviewDraft: (id: string) => Promise<void>;
+  onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
 }) {
   const [combiningDate, setCombiningDate] = useState("");
   const [message, setMessage] = useState("");
   const [pendingCombineDate, setPendingCombineDate] = useState("");
-  const [sourceFilter, setSourceFilter] = useState<"all" | "codex" | "claude" | "combined" | "journal">("all");
-  const [dateQuery, setDateQuery] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "codex" | "claude" | "combined" | "journal" | "auto">("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [dateSearchOpen, setDateSearchOpen] = useState(false);
   const [expandedDraftId, setExpandedDraftId] = useState("");
   const [draftAction, setDraftAction] = useState<{ id: string; kind: "apply" | "ignore" } | null>(null);
   const [pendingDraftApplyId, setPendingDraftApplyId] = useState("");
+  const [activeRollingReview, setActiveRollingReview] = useState<RollingWorkReview | null>(null);
+  const [rollingArchiveDate, setRollingArchiveDate] = useState("");
 
   useEffect(() => {
     const targetId = targetReviewDraftId
@@ -1460,6 +1474,12 @@ function ReviewArchivePanel({
 
     return () => window.clearTimeout(timeout);
   }, [targetReviewDraftId, targetReviewId, targetSummaryId]);
+
+  useEffect(() => {
+    if (!activeRollingReview) return;
+    const latest = rollingWorkReviews.find((review) => review.date === activeRollingReview.date);
+    if (latest && latest !== activeRollingReview) setActiveRollingReview(latest);
+  }, [activeRollingReview, rollingWorkReviews]);
 
   const sourceGroups = useMemo(() => {
     const map = new Map<string, CodexDailyReview[]>();
@@ -1480,7 +1500,11 @@ function ReviewArchivePanel({
     [dailyReviewDrafts],
   );
   const archiveEntries = useMemo(() => {
-    const conversationEntries = codexReviews.map((review) => ({
+    const rangeStart = dateFrom && dateTo && dateFrom > dateTo ? dateTo : dateFrom;
+    const rangeEnd = dateFrom && dateTo && dateFrom > dateTo ? dateFrom : dateTo;
+    const conversationEntries = codexReviews
+      .filter((review) => review.reviewKind !== "auto-work")
+      .map((review) => ({
       id: `review-${review.id}`,
       category: (review.reviewKind === "combined" ? "combined" : (review.sourceKind ?? "codex")) as
         | "codex"
@@ -1495,6 +1519,21 @@ function ReviewArchivePanel({
       review,
       report: null,
     }));
+    const autoEntries = rollingWorkReviews
+      .filter((review) => review.content.trim())
+      .map((review) => ({
+        id: `auto-${review.id}`,
+        category: "auto" as const,
+        date: review.date,
+        title: review.title,
+        subtitle: `${review.archiveReviewId ? "已归档" : "自动草稿"} · ${review.processedSessionCount} 次会话增量`,
+        content: review.content,
+        reviewId: "",
+        reportId: "",
+        rollingReview: review,
+        review: null,
+        report: null,
+      }));
     const reportEntries = reports.map((report) => ({
       id: `report-${report.id}`,
       category: "journal" as const,
@@ -1507,11 +1546,11 @@ function ReviewArchivePanel({
       review: null,
       report,
     }));
-    return [...conversationEntries, ...reportEntries]
+    return [...conversationEntries, ...autoEntries, ...reportEntries]
       .filter((entry) => sourceFilter === "all" || entry.category === sourceFilter)
-      .filter((entry) => !dateQuery.trim() || entry.date.includes(dateQuery.trim()))
+      .filter((entry) => (!rangeStart || entry.date >= rangeStart) && (!rangeEnd || entry.date <= rangeEnd))
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [codexReviews, dateQuery, reports, sourceFilter]);
+  }, [codexReviews, dateFrom, dateTo, reports, rollingWorkReviews, sourceFilter]);
 
   const combine = async (date: string, reviews: CodexDailyReview[]) => {
     if (combiningDate && combiningDate !== date) {
@@ -1580,6 +1619,20 @@ function ReviewArchivePanel({
     }
   };
 
+  const archiveRollingReview = async (review: RollingWorkReview) => {
+    if (rollingArchiveDate) return;
+    setRollingArchiveDate(review.date);
+    setMessage("");
+    try {
+      await onArchiveRollingWorkReview(review.date);
+      setMessage(`已将「${review.title}」保存到回顾档案。`);
+    } catch (error) {
+      setMessage(getSafeErrorMessage(error, "保存自动工作回顾失败。"));
+    } finally {
+      setRollingArchiveDate("");
+    }
+  };
+
   return (
     <aside className="section-surface flex h-full min-h-0 flex-col gap-3">
       <div className="flex shrink-0 items-start justify-between gap-2">
@@ -1601,6 +1654,7 @@ function ReviewArchivePanel({
           ["codex", "Codex"],
           ["claude", "Claude"],
           ["combined", "综合"],
+          ["auto", "自动"],
           ["journal", "日志"],
         ].map(([value, label]) => (
           <button
@@ -1618,18 +1672,27 @@ function ReviewArchivePanel({
       </div>
 
       {dateSearchOpen && (
-        <div className="flex shrink-0 gap-2">
-          <input
-            value={dateQuery}
-            onChange={(event) => setDateQuery(event.target.value)}
-            className="field-control h-8 min-w-0 flex-1 px-2 text-xs"
-            placeholder="2026-07 或 2026-07-04"
-          />
-          {dateQuery && (
-            <button className="soft-button h-8 px-2 text-xs" onClick={() => setDateQuery("")}>
-              清空
-            </button>
-          )}
+        <div className="grid shrink-0 gap-2 sm:grid-cols-2">
+          <label className="space-y-0.5 text-[11px] text-ink/42">
+            起始日期
+            <DatePickerPopover
+              value={dateFrom}
+              onChange={setDateFrom}
+              onClear={() => setDateFrom("")}
+              placeholder="起始日期"
+              buttonLabel="选择档案起始日期"
+            />
+          </label>
+          <label className="space-y-0.5 text-[11px] text-ink/42">
+            结束日期
+            <DatePickerPopover
+              value={dateTo}
+              onChange={setDateTo}
+              onClear={() => setDateTo("")}
+              placeholder="结束日期"
+              buttonLabel="选择档案结束日期"
+            />
+          </label>
         </div>
       )}
 
@@ -1735,6 +1798,19 @@ function ReviewArchivePanel({
               </>
             );
 
+            if ("rollingReview" in entry && entry.rollingReview) {
+              return (
+                <ResultRow
+                  key={entry.id}
+                  id={`archive-auto-${entry.rollingReview.id}`}
+                  selected={activeRollingReview?.date === entry.rollingReview.date}
+                  onClick={() => setActiveRollingReview(entry.rollingReview)}
+                >
+                  {content}
+                </ResultRow>
+              );
+            }
+
             return clickable && entry.review ? (
               <ResultRow
                 key={entry.id}
@@ -1761,11 +1837,58 @@ function ReviewArchivePanel({
       {message && <p className="shrink-0 text-xs text-anywhere text-ink/45">{message}</p>}
 
       {archiveEntries.length === 0 && <p className="text-sm leading-6 text-ink/45">回顾写好后，会在这里安静留档。</p>}
+
+      {activeRollingReview && (
+        <RollingWorkReviewArchiveOverlay
+          review={activeRollingReview}
+          archiving={rollingArchiveDate === activeRollingReview.date}
+          onArchive={() => void archiveRollingReview(activeRollingReview)}
+          onClose={() => setActiveRollingReview(null)}
+        />
+      )}
     </aside>
   );
 }
 
-function getArchiveCategoryLabel(category: "codex" | "claude" | "combined" | "journal") {
+function RollingWorkReviewArchiveOverlay({
+  review,
+  archiving,
+  onArchive,
+  onClose,
+}: {
+  review: RollingWorkReview;
+  archiving: boolean;
+  onArchive: () => void;
+  onClose: () => void;
+}) {
+  const archived = Boolean(review.archiveReviewId);
+
+  return (
+    <FocusOverlay title={review.title} onClose={onClose}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 text-xs leading-5 text-ink/45">
+          {review.date}
+          {review.lastRunAt ? ` · 更新于 ${review.lastRunAt}` : ""}
+          {` · ${review.processedSessionCount} 次会话增量 · ${review.processedChars.toLocaleString("zh-CN")} 字符`}
+        </div>
+        <button
+          className="primary-button flex h-8 items-center gap-1.5 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={archived || archiving}
+          onClick={onArchive}
+        >
+          <Save size={13} />
+          {archived ? "已归档" : archiving ? "归档中" : "保存到回顾档案"}
+        </button>
+      </div>
+      <article className="whitespace-pre-wrap text-anywhere text-sm leading-7 text-ink/72">
+        {review.content}
+      </article>
+    </FocusOverlay>
+  );
+}
+
+function getArchiveCategoryLabel(category: "codex" | "claude" | "combined" | "journal" | "auto") {
+  if (category === "auto") return "自动工作回顾";
   if (category === "claude") return "Claude Code";
   if (category === "combined") return "综合";
   if (category === "journal") return "日志";

@@ -34,6 +34,7 @@ import {
   createItemWithKnowledgeLink,
   createJournalEntry,
   createDailyReviewReplacementDraft,
+  archiveRollingWorkReview,
   createMemoryCandidate,
   createMemoryPatchDraft,
   deleteFoldersAndMoveItems,
@@ -57,6 +58,7 @@ import {
   getMemoryDocument,
   getMemoryPatchDrafts,
   getRollingWorkReviewByDate,
+  getRollingWorkReviews,
   getSummaryReports,
   getTodayDashboardData,
   markItemOpened,
@@ -542,6 +544,7 @@ export default function App() {
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const [autoWorkReviewSettings, setAutoWorkReviewSettings] = useState<AutoWorkReviewSettings | null>(null);
   const [rollingWorkReview, setRollingWorkReview] = useState<RollingWorkReview | null>(null);
+  const [rollingWorkReviews, setRollingWorkReviews] = useState<RollingWorkReview[]>([]);
   const [autoWorkReviewRunning, setAutoWorkReviewRunning] = useState(false);
   const [autoWorkReviewProgress, setAutoWorkReviewProgress] = useState<CodexReviewProgress | null>(null);
   const [loading, setLoading] = useState(true);
@@ -653,7 +656,7 @@ export default function App() {
           loadedFolders,
           loadedSettingsResult,
           loadedAutoWorkReviewSettings,
-          loadedRollingWorkReview,
+          loadedRollingWorkReviews,
           loadedJournal,
           loadedReports,
           loadedMemories,
@@ -671,7 +674,7 @@ export default function App() {
             getFolders(),
             loadAiSettingsWithSecrets(),
             getAutoWorkReviewSettings(),
-            getRollingWorkReviewByDate(todayKey),
+            getRollingWorkReviews(),
             getJournalEntries(),
             getSummaryReports(),
             getMemoryCards(),
@@ -690,7 +693,8 @@ export default function App() {
         setFolders(loadedFolders);
         setSettings(loadedSettingsResult.settings);
         setAutoWorkReviewSettings(loadedAutoWorkReviewSettings);
-        setRollingWorkReview(loadedRollingWorkReview ?? null);
+        setRollingWorkReviews(loadedRollingWorkReviews);
+        setRollingWorkReview(loadedRollingWorkReviews.find((review) => review.date === todayKey) ?? null);
         applyThemeMode(loadedSettingsResult.settings.themeMode);
         if (loadedSettingsResult.notice) setError(loadedSettingsResult.notice);
         setJournalEntries(loadedJournal);
@@ -992,12 +996,13 @@ export default function App() {
 
   const refreshAutoWorkReviewData = async () => {
     const todayKey = toDateKey(new Date());
-    const [loadedAutoSettings, loadedRollingReview] = await Promise.all([
+    const [loadedAutoSettings, loadedRollingReviews] = await Promise.all([
       getAutoWorkReviewSettings(),
-      getRollingWorkReviewByDate(todayKey),
+      getRollingWorkReviews(),
     ]);
     setAutoWorkReviewSettings(loadedAutoSettings);
-    setRollingWorkReview(loadedRollingReview ?? null);
+    setRollingWorkReviews(loadedRollingReviews);
+    setRollingWorkReview(loadedRollingReviews.find((review) => review.date === todayKey) ?? null);
   };
 
   const handleSaveAutoWorkReviewSettings = async (patch: Partial<AutoWorkReviewSettings>) => {
@@ -1034,6 +1039,20 @@ export default function App() {
       setAutoWorkReviewRunning(false);
     }
   }, []);
+
+  const handleArchiveRollingWorkReview = async (date: string) => {
+    const result = await archiveRollingWorkReview(date);
+    const [loadedRollingReviews, loadedCodexReviews] = await Promise.all([
+      getRollingWorkReviews(),
+      getCodexDailyReviews(),
+    ]);
+    const todayKey = toDateKey(new Date());
+    setRollingWorkReviews(loadedRollingReviews);
+    setRollingWorkReview(loadedRollingReviews.find((review) => review.date === todayKey) ?? null);
+    setCodexReviews(loadedCodexReviews);
+    setSearchRefreshKey((key) => key + 1);
+    return result;
+  };
 
   useEffect(() => {
     if (loading || !settings || !autoWorkReviewSettings?.enabled || !isDesktopRuntime()) return undefined;
@@ -2383,7 +2402,9 @@ export default function App() {
               onOpenLibraryView={(view) => handleSelectView({ kind: "smart", id: view })}
               onOpenJournalPage={() => handleSelectView({ kind: "journal" })}
               onOpenMemoryPage={(subView?: MemorySubView) => handleSelectView({ kind: "memory", subView })}
+              onOpenSettings={() => handleSelectView({ kind: "settings" })}
               onRunAutoWorkReview={handleRunAutoWorkReview}
+              onArchiveRollingWorkReview={handleArchiveRollingWorkReview}
               onReplaceCodexSessionIndex={handleReplaceCodexSessionIndex}
               onGenerateCodexReview={handleGenerateCodexReview}
               onGenerateCombinedReview={handleGenerateCombinedReview}
@@ -2423,6 +2444,7 @@ export default function App() {
               memoryPatchDrafts={memoryPatchDrafts}
               reports={summaryReports}
               codexReviews={codexReviews}
+              rollingWorkReviews={rollingWorkReviews}
               codexSessionIndex={codexSessionIndex}
               dailyReviewDrafts={dailyReviewDrafts}
               conversationGenerationDrafts={conversationGenerationDrafts}
@@ -2440,6 +2462,7 @@ export default function App() {
               onUpdateCodexReview={handleUpdateCodexReview}
               onApplyDailyReviewDraft={handleApplyDailyReviewDraft}
               onIgnoreDailyReviewDraft={handleIgnoreDailyReviewDraft}
+              onArchiveRollingWorkReview={handleArchiveRollingWorkReview}
               onSaveMemoryDocument={handleSaveMemoryDocument}
               onApplyMemoryPatch={handleApplyMemoryPatch}
               onIgnoreMemoryPatch={handleIgnoreMemoryPatch}
