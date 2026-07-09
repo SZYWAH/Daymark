@@ -43,7 +43,6 @@ import {
   applyDailyReviewReplacementDraft,
   applyMemoryPatchDraft,
   formatTimestamp,
-  getAiSettings,
   getCodexDailyReviews,
   getCodexSessionIndex,
   getConversationGenerationDrafts,
@@ -61,7 +60,6 @@ import {
   markItemOpened,
   replaceConversationSessionIndex,
   restoreCoreBackup,
-  saveAiSettings,
   type DaymarkCoreBackupCounts,
   type DaymarkCoreBackupV1,
   updateCodexDailyReview,
@@ -76,6 +74,7 @@ import {
   upsertDailyConversationReview,
   upsertSummaryReport,
 } from "./data/itemStore";
+import { loadAiSettingsWithSecrets, saveAiSettingsWithSecrets } from "./lib/aiSecrets";
 import { flattenFolderOptions, getFolderAndDescendantIds } from "./lib/folders";
 import { applyThemeMode, bindSystemThemeListener } from "./lib/theme";
 import { getSafeErrorMessage } from "./lib/redaction";
@@ -630,7 +629,7 @@ export default function App() {
         const [
           loadedItems,
           loadedFolders,
-          loadedSettings,
+          loadedSettingsResult,
           loadedJournal,
           loadedReports,
           loadedMemories,
@@ -646,7 +645,7 @@ export default function App() {
           await Promise.all([
             getItems(),
             getFolders(),
-            getAiSettings(),
+            loadAiSettingsWithSecrets(),
             getJournalEntries(),
             getSummaryReports(),
             getMemoryCards(),
@@ -663,8 +662,9 @@ export default function App() {
         if (!mounted) return;
         setItems(loadedItems);
         setFolders(loadedFolders);
-        setSettings(loadedSettings);
-        applyThemeMode(loadedSettings.themeMode);
+        setSettings(loadedSettingsResult.settings);
+        applyThemeMode(loadedSettingsResult.settings.themeMode);
+        if (loadedSettingsResult.notice) setError(loadedSettingsResult.notice);
         setJournalEntries(loadedJournal);
         setSummaryReports(loadedReports);
         applyMemorySharedDataIfCurrent(memorySharedSeq, {
@@ -1282,7 +1282,7 @@ export default function App() {
   };
 
   const handleSaveSettings = async (nextSettings: AiSettings) => {
-    const saved = await saveAiSettings(nextSettings);
+    const saved = await saveAiSettingsWithSecrets(nextSettings);
     setSettings(saved);
     applyThemeMode(saved.themeMode);
   };

@@ -77,7 +77,7 @@ VITE_DEEPSEEK_BASE_URL=https://api.deepseek.com
 VITE_DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
-也可以在应用设置页手动填写 API Key。注意：当前手动 Key 保存在本机应用数据中，还不是系统钥匙串存储；共享设备上建议不要保存敏感 Key。
+也可以在应用设置页手动填写 API Key。桌面端会保存到系统凭据存储；Web 模式保留本机应用数据降级，仅建议用于本机开发。
 
 ## 安全与隐私
 
@@ -85,7 +85,7 @@ VITE_DEEPSEEK_MODEL=deepseek-v4-flash
 - 前端错误提示会隐藏常见 API Key、Bearer token、密码和密钥字段，避免上游错误把敏感内容直接显示到界面。
 - 核心备份不会导出 AI 设置、API Key、AI 草稿或历史总结报告；备份文件只保存在用户主动选择的位置，不会上传。
 - `.env.local` 不应提交到 Git。若把环境变量 Key 写进打包环境，生成的应用不适合分发给他人。
-- 手动 API Key 当前仍是本机应用数据存储，不是系统钥匙串。后续如果需要更强保护，应迁移到 OS credential/keychain。
+- 桌面端手动 API Key 使用系统凭据存储；Web 模式仍使用本机应用数据降级，不适合共享设备。
 
 ## 核心备份
 

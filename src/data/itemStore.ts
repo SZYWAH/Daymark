@@ -393,6 +393,7 @@ export function getDefaultAiSettings(): AiSettings {
     model: import.meta.env.VITE_DEEPSEEK_MODEL || "deepseek-v4-flash",
     useEnvKey: true,
     manualApiKey: "",
+    manualKeyStored: false,
     supportsVision: false,
     stream: false,
     themeMode: getThemeMode(),
@@ -1438,6 +1439,8 @@ export async function getAiSettings() {
     id: "ai",
     provider,
     supportsVision: Boolean(saved?.supportsVision),
+    manualKeyStored: Boolean(saved?.manualKeyStored),
+    manualKeyClearRequested: false,
     themeMode: saved?.themeMode ?? getThemeMode(),
   };
 
@@ -1447,12 +1450,17 @@ export async function getAiSettings() {
 export async function saveAiSettings(settings: AiSettings) {
   const db = await getDb();
   const provider = settings.provider === "openai-compatible" ? "openai-compatible" : "deepseek";
+  const {
+    manualKeyClearRequested: _manualKeyClearRequested,
+    ...settingsToSave
+  } = settings;
   const nextSettings: AiSettings = {
-    ...settings,
+    ...settingsToSave,
     id: "ai",
     provider,
     customProviderName: provider === "openai-compatible" ? settings.customProviderName?.trim() || "自定义模型" : "",
     supportsVision: provider === "openai-compatible" ? Boolean(settings.supportsVision) : false,
+    manualKeyStored: Boolean(settings.manualKeyStored),
     themeMode: settings.themeMode ?? "dark",
     updatedAt: formatTimestamp(),
   };

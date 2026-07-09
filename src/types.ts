@@ -91,6 +91,8 @@ export type AiSettings = {
   model: string;
   useEnvKey: boolean;
   manualApiKey?: string;
+  manualKeyStored?: boolean;
+  manualKeyClearRequested?: boolean;
   supportsVision?: boolean;
   stream: boolean;
   themeMode: ThemeMode;

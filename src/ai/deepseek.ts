@@ -10,6 +10,7 @@ import type {
   JournalEntry,
   SummaryReport,
 } from "../types";
+import { resolveAiSettingsForRequest } from "../lib/aiSecrets";
 import { getSafeErrorMessage } from "../lib/redaction";
 
 type ChatMessageContent =
@@ -131,6 +132,7 @@ export function getEffectiveAiSettings(settings: AiSettings): EffectiveAiSetting
   const envApiKey = isDeepSeek && settings.useEnvKey ? import.meta.env.VITE_DEEPSEEK_API_KEY?.trim() : "";
   const manualApiKey = settings.manualApiKey?.trim();
   const apiKey = envApiKey || manualApiKey || "";
+  const hasStoredManualKey = Boolean(settings.manualKeyStored);
 
   return {
     ...settings,
@@ -138,7 +140,7 @@ export function getEffectiveAiSettings(settings: AiSettings): EffectiveAiSetting
     baseUrl: isDeepSeek && settings.useEnvKey ? import.meta.env.VITE_DEEPSEEK_BASE_URL || settings.baseUrl : settings.baseUrl,
     model: isDeepSeek && settings.useEnvKey ? import.meta.env.VITE_DEEPSEEK_MODEL || settings.model : settings.model,
     apiKey,
-    keySource: envApiKey ? "env" : apiKey ? "manual" : "missing",
+    keySource: envApiKey ? "env" : apiKey || hasStoredManualKey ? "manual" : "missing",
   };
 }
 
@@ -563,7 +565,7 @@ async function callDeepSeek(
   messages: ChatMessage[],
   options: AiRequestOptions = {},
 ) {
-  const effective = getEffectiveAiSettings(settings);
+  const effective = getEffectiveAiSettings(await resolveAiSettingsForRequest(settings));
   const providerLabel = getProviderLabel(effective);
 
   if (!effective.apiKey) {
@@ -617,7 +619,7 @@ async function callDeepSeekStream(
   onToken: (token: string, fullText: string) => void,
   options: AiRequestOptions = {},
 ) {
-  const effective = getEffectiveAiSettings(settings);
+  const effective = getEffectiveAiSettings(await resolveAiSettingsForRequest(settings));
   const providerLabel = getProviderLabel(effective);
 
   if (!effective.apiKey) {

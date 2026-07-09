@@ -30,6 +30,7 @@ import {
   type DaymarkCoreBackupCounts,
   type DaymarkCoreBackupV1,
 } from "../data/itemStore";
+import { hasStoredAiApiKey } from "../lib/aiSecrets";
 import { getSafeErrorMessage } from "../lib/redaction";
 import { applyThemeMode } from "../lib/theme";
 import { PageWorkspace } from "./PageWorkspace";
@@ -52,6 +53,8 @@ function normalizeSettingsForDirty(settings: AiSettings) {
     model: settings.model.trim(),
     useEnvKey: settings.useEnvKey,
     manualApiKey: settings.manualApiKey?.trim() ?? "",
+    manualKeyStored: Boolean(settings.manualKeyStored),
+    manualKeyClearRequested: Boolean(settings.manualKeyClearRequested),
     supportsVision: Boolean(settings.supportsVision),
     stream: settings.stream,
     themeMode: settings.themeMode,
@@ -76,9 +79,24 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
   const themeSavingRef = useRef(false);
   const savingRef = useRef(false);
   const testingRef = useRef(false);
+  const keyProbeSeqRef = useRef(0);
   const backupInputRef = useRef<HTMLInputElement | null>(null);
   const envKeyAvailable = hasEnvApiKey();
+  const desktop = isDesktopRuntime();
   const effective = useMemo(() => getEffectiveAiSettings(draft), [draft]);
+  const pendingManualKey = Boolean(draft.manualApiKey?.trim());
+  const keySourceLabel =
+    effective.keySource === "env"
+      ? "环境变量"
+      : desktop
+        ? pendingManualKey
+          ? "手动输入待保存"
+          : draft.manualKeyStored
+            ? "系统凭据"
+            : "未配置"
+        : effective.keySource === "manual"
+          ? "本机应用数据"
+          : "未配置";
   const dirty = useMemo(
     () => JSON.stringify(normalizeSettingsForDirty(draft)) !== JSON.stringify(normalizeSettingsForDirty(settings)),
     [draft, settings],
@@ -92,6 +110,32 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
     onDirtyChange?.(dirty);
     return () => onDirtyChange?.(false);
   }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (!desktop || draft.manualApiKey?.trim() || draft.manualKeyClearRequested) return;
+    const requestSeq = ++keyProbeSeqRef.current;
+    void hasStoredAiApiKey(draft)
+      .then((stored) => {
+        if (keyProbeSeqRef.current !== requestSeq) return;
+        setDraft((current) => {
+          if (
+            current.provider !== draft.provider ||
+            current.baseUrl !== draft.baseUrl ||
+            current.manualApiKey?.trim() ||
+            current.manualKeyClearRequested
+          ) {
+            return current;
+          }
+          if (Boolean(current.manualKeyStored) === stored) return current;
+          return { ...current, manualKeyStored: stored };
+        });
+      })
+      .catch((error) => {
+        if (keyProbeSeqRef.current !== requestSeq) return;
+        setMessageType("error");
+        setMessage(getSafeErrorMessage(error, "无法读取系统凭据状态。"));
+      });
+  }, [desktop, draft.provider, draft.baseUrl, draft.manualApiKey, draft.manualKeyClearRequested]);
 
   const saveSettings = async () => {
     if (savingRef.current || themeSavingRef.current) return;
@@ -404,6 +448,8 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
                       baseUrl: provider === "deepseek" ? "https://api.deepseek.com" : draft.baseUrl,
                       model: provider === "deepseek" ? "deepseek-v4-flash" : draft.model,
                       manualApiKey: providerChanged ? "" : draft.manualApiKey,
+                      manualKeyStored: providerChanged ? false : draft.manualKeyStored,
+                      manualKeyClearRequested: false,
                     });
                     if (providerChanged) {
                       setMessageType("info");
@@ -440,7 +486,14 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
             Base URL
             <input
               value={draft.baseUrl}
-              onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  baseUrl: event.target.value,
+                  manualKeyStored: false,
+                  manualKeyClearRequested: false,
+                })
+              }
               className="field-control mt-1 h-10 w-full px-3 text-sm"
             />
           </label>
@@ -463,17 +516,39 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
             <div className="flex gap-2">
               <input
                 value={draft.manualApiKey ?? ""}
-                onChange={(event) => setDraft({ ...draft, manualApiKey: event.target.value })}
+                onChange={(event) =>
+                  setDraft({
+                    ...draft,
+                    manualApiKey: event.target.value,
+                    manualKeyClearRequested: false,
+                  })
+                }
                 type="password"
-                placeholder="也可以填写 API Key；会保存在本机应用数据中"
+                placeholder={
+                  desktop
+                    ? draft.manualKeyStored
+                      ? "已保存到系统凭据；输入新 Key 会覆盖"
+                      : "填写 API Key；保存后进入系统凭据"
+                    : "填写 API Key；Web 模式保存在本机应用数据中"
+                }
                 className="field-control h-10 min-w-0 flex-1 px-3 text-sm"
               />
               <button
                 className="soft-button flex h-10 shrink-0 items-center gap-1.5 px-3 text-xs"
-                disabled={!draft.manualApiKey}
+                disabled={!draft.manualApiKey && !draft.manualKeyStored}
                 onClick={() => {
-                  setDraft({ ...draft, manualApiKey: "" });
-                  setMessage("手动 API Key 已从当前配置草稿中清除，保存后生效。");
+                  if (draft.manualApiKey?.trim()) {
+                    setDraft({ ...draft, manualApiKey: "", manualKeyClearRequested: false });
+                    setMessage("待保存的手动 API Key 已从当前配置草稿中清除。");
+                  } else {
+                    setDraft({
+                      ...draft,
+                      manualApiKey: "",
+                      manualKeyStored: false,
+                      manualKeyClearRequested: true,
+                    });
+                    setMessage("当前 Base URL 的系统凭据 Key 已标记清除，保存后生效。");
+                  }
                   setMessageType("info");
                 }}
               >
@@ -485,9 +560,9 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
               {envKeyAvailable
                 ? draft.provider === "deepseek"
                   ? "已检测到 DeepSeek 环境变量 Key，调用时会优先使用它。注意：Vite 环境变量不是系统钥匙串，若在打包前写入 Key，不适合把生成的应用分发给他人。"
-                  : "自定义供应商使用下方手动 API Key，不读取 DeepSeek 环境变量；保存后会留在本机应用数据中。"
-                : "未检测到 DeepSeek 环境变量 Key。自定义供应商可直接填写自己的 API Key；保存后会留在本机应用数据中。"}
-              {" "}目前手动 Key 还不是系统钥匙串存储；共享设备上建议不要在本应用保存或内置 API Key。连接错误会在界面显示前脱敏。
+                  : "自定义供应商使用下方手动 API Key，不读取 DeepSeek 环境变量。"
+                : "未检测到 DeepSeek 环境变量 Key。自定义供应商可直接填写自己的 API Key。"}
+              {" "}桌面端手动 Key 会保存到系统凭据；Web 模式保留本机应用数据降级。连接错误会在界面显示前脱敏。
             </p>
           </div>
 
@@ -522,7 +597,7 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
 
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-ink/45">
-              当前模型：{getProviderLabel(draft)} · Key 来源：{effective.keySource === "env" ? "环境变量" : effective.keySource === "manual" ? "手动输入" : "未配置"}
+              当前模型：{getProviderLabel(draft)} · Key 来源：{keySourceLabel}
             </span>
             {dirty && <span className="text-xs text-copper/80">有未保存修改</span>}
           </div>
