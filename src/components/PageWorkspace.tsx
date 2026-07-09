@@ -107,7 +107,7 @@ export function PageMetricColumn({
   return (
     <aside className={`page-metric-column ${className}`}>
       {title && <div className="mb-5 text-xs font-semibold uppercase tracking-[0.16em] text-ink/52">{title}</div>}
-      <div className="space-y-6">{children}</div>
+      <div className="metric-stack space-y-6">{children}</div>
     </aside>
   );
 }
@@ -122,10 +122,10 @@ export function MetricItem({
   detail?: ReactNode;
 }) {
   return (
-    <div className="border-b border-line/70 pb-5 last:border-b-0">
+    <div className="metric-item border-b border-line/70 pb-5 last:border-b-0">
       <div className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/55">{label}</div>
-      <div className="mt-2 text-2xl font-semibold text-ink">{value}</div>
-      {detail && <div className="mt-1 text-sm leading-6 text-ink/50">{detail}</div>}
+      <div className="metric-item-value mt-2 text-2xl font-semibold text-ink">{value}</div>
+      {detail && <div className="metric-item-detail mt-1 text-sm leading-6 text-ink/50">{detail}</div>}
     </div>
   );
 }

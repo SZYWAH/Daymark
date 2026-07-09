@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getEffectiveAiSettings, streamSummarizeConversationReview, type CodexReviewProgress } from "../ai/deepseek";
+import { DatePickerPopover } from "./DatePickerPopover";
 import { MetricItem, PageMetricColumn, PageWorkspace } from "./PageWorkspace";
 import { BoundedPreview, ResultRow, ScrollableResultPanel } from "./ResultPanels";
 import { SelectMenu } from "./SelectMenu";
@@ -216,7 +217,7 @@ export function MemoryPage({
           )}
 
           {subView === "ai-review" && (
-            <div className="grid h-full min-h-0 gap-4 overflow-y-auto xl:grid-cols-[minmax(0,1fr)_300px] xl:overflow-hidden">
+            <div className="grid h-full min-h-0 gap-4 overflow-y-auto xl:grid-cols-[minmax(0,1fr)_240px] xl:overflow-hidden">
               <div className="min-h-0 overflow-y-auto pr-0 scrollbar-thin xl:pr-6">
                 <CodexReviewWorkbench
                   settings={settings}
@@ -492,7 +493,7 @@ function MemoryReviewMetrics({
   const memoryChars = memoryDocument?.content.trim().length ?? 0;
 
   return (
-    <PageMetricColumn title="今日状态">
+    <PageMetricColumn title="今日状态" className="px-4 py-5 xl:w-full [&_.metric-item]:pb-4 [&_.metric-item-detail]:text-xs [&_.metric-item-value]:text-2xl [&_.metric-stack]:space-y-4">
       <MetricItem label="日期" value={todayKey} detail="只在用户点击后扫描或读取会话。" />
       <MetricItem label="已索引会话" value={indexedSessions} detail="扫描阶段只保存元信息。" />
       <MetricItem label="今日回顾" value={todayReviews} detail="Codex、Claude Code 与综合回顾分开统计。" />
@@ -773,6 +774,7 @@ function CodexReviewWorkbench({
   const partialContentRef = useRef("");
   const progressRef = useRef<CodexReviewProgress | null>(null);
   const desktop = isDesktopRuntime();
+  const todayKey = toDateKey(new Date());
   const aiReady = settings ? getEffectiveAiSettings(settings).keySource !== "missing" : false;
 
   const reviewBySessionId = useMemo(() => {
@@ -824,6 +826,13 @@ function CodexReviewWorkbench({
     } finally {
       setScanning(false);
     }
+  };
+
+  const filterToday = () => {
+    setDateFrom(todayKey);
+    setDateTo(todayKey);
+    setPendingGenerateKey("");
+    setMessage("已筛选今天，请点击扫描会话。");
   };
 
   const toggleSession = (id: string) => {
@@ -1057,7 +1066,7 @@ function CodexReviewWorkbench({
         </div>
       )}
 
-      <div className="mb-1.5 grid shrink-0 gap-1.5 md:grid-cols-[150px_140px_140px_minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="mb-1.5 grid shrink-0 gap-1.5 md:grid-cols-[150px_150px_150px_72px_minmax(0,1fr)_minmax(0,1fr)]">
         <label className="space-y-0.5 text-[11px] text-ink/42">
           来源
           <SelectMenu
@@ -1072,25 +1081,33 @@ function CodexReviewWorkbench({
         </label>
         <label className="space-y-0.5 text-[11px] text-ink/42">
           起始日期
-          <input
+          <DatePickerPopover
             value={dateFrom}
-            onChange={(event) => setDateFrom(event.target.value)}
-            inputMode="numeric"
-            pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}"
-            className="field-control h-9 w-full px-2 font-mono text-xs"
-            placeholder="YYYY-MM-DD"
+            onChange={setDateFrom}
+            onClear={() => setDateFrom("")}
+            placeholder="起始日期"
+            buttonLabel="选择起始日期"
           />
         </label>
         <label className="space-y-0.5 text-[11px] text-ink/42">
           结束日期
-          <input
+          <DatePickerPopover
             value={dateTo}
-            onChange={(event) => setDateTo(event.target.value)}
-            inputMode="numeric"
-            pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}"
-            className="field-control h-9 w-full px-2 font-mono text-xs"
-            placeholder="YYYY-MM-DD"
+            onChange={setDateTo}
+            onClear={() => setDateTo("")}
+            placeholder="结束日期"
+            buttonLabel="选择结束日期"
           />
+        </label>
+        <label className="space-y-0.5 text-[11px] text-ink/42">
+          快捷
+          <button
+            type="button"
+            className={`soft-button h-9 w-full px-2.5 text-xs ${dateFrom === todayKey && dateTo === todayKey ? "active-toggle" : ""}`}
+            onClick={filterToday}
+          >
+            今日
+          </button>
         </label>
         <label className="space-y-0.5 text-[11px] text-ink/42">
           路径筛选
