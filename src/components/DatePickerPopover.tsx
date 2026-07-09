@@ -54,7 +54,7 @@ export function DatePickerPopover({
       </button>
 
       {open && (
-        <section className="section-surface absolute left-0 top-full z-40 mt-2 w-[260px] p-3 shadow-xl">
+        <section className="absolute left-0 top-full z-[80] mt-2 w-[260px] rounded-[8px] border border-line bg-surface p-3 shadow-panel">
           <div className="mb-3 flex items-center justify-between gap-2">
             <button
               type="button"
