@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+src-tauri/gen/
+src-tauri/target/
+src-tauri/target-*/
+
+# Local artifacts
+work/
+*.log
+dev-server*.log
+vite-ui-test*.log
+NUL
+
+# Environment files
+.env.local
+*.local
+
+# Editor and system files
+.idea/
+.DS_Store
