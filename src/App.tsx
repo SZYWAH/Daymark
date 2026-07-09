@@ -78,6 +78,7 @@ import {
 } from "./data/itemStore";
 import { flattenFolderOptions, getFolderAndDescendantIds } from "./lib/folders";
 import { applyThemeMode, bindSystemThemeListener } from "./lib/theme";
+import { getSafeErrorMessage } from "./lib/redaction";
 import { ATTENTION_READING_STATUSES, getAttentionPriority, isAttentionItem } from "./lib/libraryViews";
 import {
   extractLocalFileText,
@@ -680,7 +681,7 @@ export default function App() {
         setSelectedId("");
       } catch (loadError) {
         if (!mounted) return;
-        setError(loadError instanceof Error ? loadError.message : "加载数据失败。");
+        setError(getSafeErrorMessage(loadError, "加载数据失败。"));
       } finally {
         if (mounted) setLoading(false);
       }
@@ -1371,7 +1372,7 @@ export default function App() {
       const updated = await updateItem(selectedItem.id, { favorite: !selectedItem.favorite });
       await refreshLibraryData(updated.id);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "更新收藏状态失败。");
+      setError(getSafeErrorMessage(error, "更新收藏状态失败。"));
       throw error;
     }
   };
@@ -1799,7 +1800,7 @@ export default function App() {
           );
           await refreshJournalData();
         } catch (error) {
-          candidateError = error instanceof Error ? error.message : "未知错误";
+          candidateError = getSafeErrorMessage(error, "未知错误");
         }
       }
 

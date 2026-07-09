@@ -21,6 +21,7 @@ import { MetricItem, PageMetricColumn, PageWorkspace } from "./PageWorkspace";
 import { BoundedPreview, ResultRow, ScrollableResultPanel } from "./ResultPanels";
 import { SelectMenu } from "./SelectMenu";
 import { toDateKey } from "../lib/date";
+import { getSafeErrorMessage } from "../lib/redaction";
 import {
   cancelConversationReviewJob,
   indexConversationSessions,
@@ -387,7 +388,7 @@ function MemoryDocumentPanel({
       setEditing(false);
       clearMemoryDocumentDraft();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败。");
+      setMessage(getSafeErrorMessage(error, "保存失败。"));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -637,7 +638,7 @@ function MemoryPatchDraftsPanel({
       setPendingApplyId("");
       setPendingStaleApplyId("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "应用建议失败。");
+      setMessage(getSafeErrorMessage(error, "应用建议失败。"));
     } finally {
       busyRef.current = "";
       setBusyId("");
@@ -660,7 +661,7 @@ function MemoryPatchDraftsPanel({
       });
       setMessage("已忽略这条建议。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "忽略建议失败。");
+      setMessage(getSafeErrorMessage(error, "忽略建议失败。"));
     } finally {
       busyRef.current = "";
       setBusyId("");
@@ -819,7 +820,7 @@ function CodexReviewWorkbench({
       setSelectedIds(new Set());
       setMessage(result.length > 0 ? `找到 ${result.length} 个会话。扫描只读取文件元信息，请手动勾选要生成回顾的会话。` : "没有找到符合条件的会话。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "扫描 Codex 会话失败。");
+      setMessage(getSafeErrorMessage(error, "扫描 Codex 会话失败。"));
     } finally {
       setScanning(false);
     }
@@ -877,7 +878,7 @@ function CodexReviewWorkbench({
       );
     } catch (error) {
       if (previewRequestSeqRef.current !== requestSeq) return;
-      setPreviewMessage(error instanceof Error ? error.message : "读取会话预览失败。");
+      setPreviewMessage(getSafeErrorMessage(error, "读取会话预览失败。"));
     } finally {
       if (previewRequestSeqRef.current === requestSeq) setPreviewingId("");
     }
@@ -890,7 +891,7 @@ function CodexReviewWorkbench({
       await navigator.clipboard?.writeText(previewText);
       setPreviewMessage("已复制会话正文预览。");
     } catch (error) {
-      setPreviewMessage(error instanceof Error ? error.message : "复制失败，请稍后再试。");
+      setPreviewMessage(getSafeErrorMessage(error, "复制失败，请稍后再试。"));
     }
   };
 
@@ -984,7 +985,7 @@ function CodexReviewWorkbench({
         }
         setMessage(savedPartialContent.trim() ? "已取消本次生成，临时草稿已保留。" : "已取消本次生成。");
       } else {
-        setMessage(error instanceof Error ? error.message : "生成 Codex 回顾失败。");
+        setMessage(getSafeErrorMessage(error, "生成 Codex 回顾失败。"));
       }
     } finally {
       setGenerating(false);
@@ -1276,7 +1277,7 @@ function ConversationSessionPreviewOverlay({
       );
     } catch (error) {
       if (previewRequestSeqRef.current !== requestSeq) return;
-      setMessage(error instanceof Error ? error.message : "读取会话预览失败。");
+      setMessage(getSafeErrorMessage(error, "读取会话预览失败。"));
     } finally {
       if (previewRequestSeqRef.current === requestSeq) setPreviewingId("");
     }
@@ -1289,7 +1290,7 @@ function ConversationSessionPreviewOverlay({
       await navigator.clipboard?.writeText(previewText);
       setMessage("已复制会话正文预览。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "复制失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "复制失败，请稍后再试。"));
     }
   };
 
@@ -1519,7 +1520,7 @@ function ReviewArchivePanel({
           : `已合成“${result.review.title}”。记忆修改建议未生成，可稍后重新生成。`,
       );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "合成今日总回顾失败。");
+      setMessage(getSafeErrorMessage(error, "合成今日总回顾失败。"));
     } finally {
       setCombiningDate("");
     }
@@ -1540,7 +1541,7 @@ function ReviewArchivePanel({
       setMessage(`已应用“${draft.title}”，原回顾已被这份草稿替换。`);
       setPendingDraftApplyId("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "应用替换草稿失败。");
+      setMessage(getSafeErrorMessage(error, "应用替换草稿失败。"));
     } finally {
       setDraftAction(null);
     }
@@ -1555,7 +1556,7 @@ function ReviewArchivePanel({
       await onIgnoreDailyReviewDraft(draft.id);
       setMessage(`已忽略“${draft.title}”，现有回顾保持不变。`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "忽略替换草稿失败。");
+      setMessage(getSafeErrorMessage(error, "忽略替换草稿失败。"));
     } finally {
       setDraftAction(null);
     }
@@ -1884,7 +1885,7 @@ function ReviewReaderOverlay({
       setSavedContent(content);
       setMessage("已保存这份回顾。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败。");
+      setMessage(getSafeErrorMessage(error, "保存失败。"));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -1942,7 +1943,7 @@ function ReviewReaderOverlay({
       if (error instanceof DOMException && error.name === "AbortError") {
         setMessage("已取消本次草稿生成。");
       } else {
-        setMessage(error instanceof Error ? error.message : "重新生成失败。");
+        setMessage(getSafeErrorMessage(error, "重新生成失败。"));
       }
     } finally {
       regeneratingRef.current = false;

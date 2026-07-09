@@ -1,6 +1,7 @@
 import { Save, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { EditForm } from "./EditForm";
+import { getSafeErrorMessage } from "../lib/redaction";
 import type { FolderNode, Item } from "../types";
 
 type EditorOverlayProps = {
@@ -74,7 +75,7 @@ export function EditorOverlay({
     try {
       await onSave();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "保存失败，请稍后再试。"));
     } finally {
       savingRef.current = false;
       setSaving(false);

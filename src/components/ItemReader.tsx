@@ -25,6 +25,7 @@ import { LinkPanel } from "./LinkPanel";
 import { SelectMenu } from "./SelectMenu";
 import { checkLocalPath, openExternalUrl, openLocalPath, revealLocalPath, type PathStatus } from "../lib/desktop";
 import { getFolderPath } from "../lib/folders";
+import { getSafeErrorMessage } from "../lib/redaction";
 import {
   PROCESS_STATUSES,
   READING_STATUSES,
@@ -146,7 +147,7 @@ export function ItemReader({
       })
       .catch((error) => {
         if (!cancelled) {
-          setPathStatus({ exists: false, message: error instanceof Error ? error.message : "无法检查路径" });
+          setPathStatus({ exists: false, message: getSafeErrorMessage(error, "无法检查路径") });
         }
       });
 
@@ -182,7 +183,7 @@ export function ItemReader({
       await navigator.clipboard.writeText(value);
       setFileActionMessage("路径已复制。");
     } catch (error) {
-      setFileActionMessage(error instanceof Error ? error.message : "复制失败，请稍后再试。");
+      setFileActionMessage(getSafeErrorMessage(error, "复制失败，请稍后再试。"));
     }
   };
 
@@ -192,7 +193,7 @@ export function ItemReader({
       await action();
       setFileActionMessage(successMessage);
     } catch (error) {
-      setFileActionMessage(error instanceof Error ? error.message : "操作失败，请检查路径或权限。");
+      setFileActionMessage(getSafeErrorMessage(error, "操作失败，请检查路径或权限。"));
     }
   };
 
@@ -202,7 +203,7 @@ export function ItemReader({
       await onToggleFavorite();
       setReaderMessage(item.favorite ? "已取消收藏。" : "已收藏。");
     } catch (error) {
-      setReaderMessage(error instanceof Error ? error.message : "收藏状态更新失败，请稍后再试。");
+      setReaderMessage(getSafeErrorMessage(error, "收藏状态更新失败，请稍后再试。"));
     }
   };
 
@@ -407,7 +408,7 @@ function ReaderWorkbench({
     try {
       await onUpdateItem(patch);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "更新失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "更新失败，请稍后再试。"));
     }
   };
 
@@ -416,7 +417,7 @@ function ReaderWorkbench({
     try {
       await onMoveItem(folderId);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "移动失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "移动失败，请稍后再试。"));
     }
   };
 

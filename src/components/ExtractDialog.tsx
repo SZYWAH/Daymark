@@ -1,6 +1,7 @@
 import { Save, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { FolderPicker } from "./FolderPicker";
+import { getSafeErrorMessage } from "../lib/redaction";
 import type { FolderNode } from "../types";
 
 export type ExtractDraft = {
@@ -87,7 +88,7 @@ export function ExtractDialog({
     try {
       await onSave();
     } catch (error) {
-      setLocalMessage(error instanceof Error ? error.message : "保存失败，请稍后再试。");
+      setLocalMessage(getSafeErrorMessage(error, "保存失败，请稍后再试。"));
     } finally {
       savingRef.current = false;
       setSaving(false);

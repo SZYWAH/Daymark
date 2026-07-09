@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FolderPicker } from "./FolderPicker";
 import { SelectMenu } from "./SelectMenu";
 import { isDesktopRuntime, pickLocalFiles, pickLocalFolder } from "../lib/desktop";
+import { getSafeErrorMessage } from "../lib/redaction";
 import { READING_STATUSES, type FolderNode, type ItemType, type ReadingStatus } from "../types";
 
 export type ImportMode = "card" | "url" | "file" | "folder";
@@ -167,7 +168,7 @@ export function ImportDialog({
       setMode("file");
       setBatchDrafts(createDraftsFromPaths(paths, "file", folderId || undefined));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "选择文件失败。");
+      setMessage(getSafeErrorMessage(error, "选择文件失败。"));
     }
   };
 
@@ -188,7 +189,7 @@ export function ImportDialog({
         setMessage("已填入第一个文件；批量导入请用下方按钮。");
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "选择文件失败。");
+      setMessage(getSafeErrorMessage(error, "选择文件失败。"));
     }
   };
 
@@ -204,7 +205,7 @@ export function ImportDialog({
         setTitle(getFileName(path));
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "选择文件夹失败。");
+      setMessage(getSafeErrorMessage(error, "选择文件夹失败。"));
     }
   };
 
@@ -252,7 +253,7 @@ export function ImportDialog({
       });
       close(true);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "保存失败，请稍后再试。"));
     } finally {
       savingRef.current = false;
       setSaving(false);

@@ -27,6 +27,7 @@ import {
   readSelectedConversationSessions,
 } from "../lib/desktop";
 import { toDateKey } from "../lib/date";
+import { getSafeErrorMessage } from "../lib/redaction";
 import type {
   AiSettings,
   CodexDailyReview,
@@ -167,7 +168,7 @@ export function TodayPage({
     } catch (error) {
       setComposerMessage({
         kind: "error",
-        text: error instanceof Error ? error.message : "保存失败，请稍后再试。",
+        text: getSafeErrorMessage(error, "保存失败，请稍后再试。"),
       });
       return false;
     } finally {
@@ -578,7 +579,7 @@ function TodayReviewPanel({
       setMessage(result.length > 0 ? `今天找到 ${result.length} 个会话。生成时才会读取正文。` : "今天没有找到可回顾的 AI 会话。");
       return result;
     } catch (error) {
-      const text = error instanceof Error ? error.message : "扫描今日会话失败。";
+      const text = getSafeErrorMessage(error, "扫描今日会话失败。");
       setMessage(text);
       return [];
     } finally {
@@ -652,7 +653,7 @@ function TodayReviewPanel({
           : `已生成 ${sourceLabels[sourceKind]} 今日回顾。记忆修改建议未生成，可稍后在 AI 回顾台重试。`,
       );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "生成今日回顾失败。");
+      setMessage(getSafeErrorMessage(error, "生成今日回顾失败。"));
     } finally {
       setGeneratingSource(null);
       abortRef.current = null;
@@ -698,7 +699,7 @@ function TodayReviewPanel({
           : "已合成今日总回顾。记忆修改建议未生成，可稍后在 AI 回顾台重试。",
       );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "合成今日总回顾失败。");
+      setMessage(getSafeErrorMessage(error, "合成今日总回顾失败。"));
     } finally {
       setGeneratingSource(null);
       abortRef.current = null;

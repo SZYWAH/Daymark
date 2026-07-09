@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type TextareaHTMLAttributes } from "react";
 import { LinkPanel } from "./LinkPanel";
 import { PageWorkspace } from "./PageWorkspace";
+import { getSafeErrorMessage } from "../lib/redaction";
 import type { EntityKind, Item, JournalEntry, KnowledgeLink, MemoryCard, SummaryReport } from "../types";
 
 type SummaryPrompt = {
@@ -299,7 +300,7 @@ export function JournalPage({
       setTodoText((current) => (current === submittedTodoText ? "" : current));
       if (closeFullscreen) setComposerFullscreenOpen(false);
     } catch (error) {
-      setJournalMessage(error instanceof Error ? error.message : "日志保存失败，请稍后再试。");
+      setJournalMessage(getSafeErrorMessage(error, "日志保存失败，请稍后再试。"));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -342,7 +343,7 @@ export function JournalPage({
       setPendingDeleteEditId("");
       clearJournalInlineEditDraft();
     } catch (error) {
-      setJournalMessage(error instanceof Error ? error.message : "日志保存失败，请稍后再试。");
+      setJournalMessage(getSafeErrorMessage(error, "日志保存失败，请稍后再试。"));
     } finally {
       savingEditRef.current = "";
       setSavingEditId("");
@@ -1398,7 +1399,7 @@ function JournalEntryFullscreenOverlay({
       onSaveSuccess?.(entry.id);
       setEditing(false);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "日志保存失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "日志保存失败，请稍后再试。"));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -1419,7 +1420,7 @@ function JournalEntryFullscreenOverlay({
       await navigator.clipboard?.writeText(parts.join("\n\n"));
       setMessage("已复制。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "复制失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "复制失败，请稍后再试。"));
     }
   };
 

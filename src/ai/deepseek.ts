@@ -10,6 +10,7 @@ import type {
   JournalEntry,
   SummaryReport,
 } from "../types";
+import { getSafeErrorMessage } from "../lib/redaction";
 
 type ChatMessageContent =
   | string
@@ -592,7 +593,7 @@ async function callDeepSeek(
     const content = data.choices?.[0]?.message?.content?.trim();
 
     if (!response.ok) {
-      throw new Error(data.error?.message || `${providerLabel} 请求失败：HTTP ${response.status}`);
+      throw new Error(getSafeErrorMessage(data.error?.message, `${providerLabel} 请求失败：HTTP ${response.status}`));
     }
 
     if (!content) {
@@ -604,7 +605,7 @@ async function callDeepSeek(
     if (timeout.didTimeout()) {
       throw new Error(`${providerLabel} 请求超过 ${Math.round(timeoutMs / 1000)} 秒仍未返回，已自动停止。`);
     }
-    throw error;
+    throw new Error(getSafeErrorMessage(error, `${providerLabel} 请求失败。`));
   } finally {
     timeout.cleanup();
   }
@@ -648,7 +649,7 @@ async function callDeepSeekStream(
 
     if (!response.ok) {
       const data = (await response.json().catch(() => ({}))) as ChatCompletionResponse;
-      throw new Error(data.error?.message || `${providerLabel} 请求失败：HTTP ${response.status}`);
+      throw new Error(getSafeErrorMessage(data.error?.message, `${providerLabel} 请求失败：HTTP ${response.status}`));
     }
 
     if (!response.body) {
@@ -677,7 +678,7 @@ async function callDeepSeekStream(
 
         const parsed = JSON.parse(payload) as ChatCompletionStreamChunk;
         if (parsed.error?.message) {
-          throw new Error(parsed.error.message);
+          throw new Error(getSafeErrorMessage(parsed.error.message, `${providerLabel} 流式请求失败。`));
         }
 
         const token = parsed.choices?.[0]?.delta?.content ?? "";
@@ -698,7 +699,7 @@ async function callDeepSeekStream(
     if (timeout.didTimeout()) {
       throw new Error(`${providerLabel} 流式请求超过 ${Math.round(timeoutMs / 1000)} 秒仍未完成，已自动停止。`);
     }
-    throw error;
+    throw new Error(getSafeErrorMessage(error, `${providerLabel} 流式请求失败。`));
   } finally {
     timeout.cleanup();
   }
@@ -879,7 +880,10 @@ function countCharacters(value: string) {
 }
 
 function formatStreamFailure(error: unknown, prefix: string) {
-  const detail = error instanceof Error && error.message ? `原因：${error.message}` : "原因：流式连接异常。";
+  const detail =
+    error instanceof Error && error.message
+      ? `原因：${getSafeErrorMessage(error, "流式连接异常。")}`
+      : "原因：流式连接异常。";
   return `${prefix}${detail}`;
 }
 

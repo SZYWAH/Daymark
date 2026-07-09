@@ -30,6 +30,7 @@ import {
   type DaymarkCoreBackupCounts,
   type DaymarkCoreBackupV1,
 } from "../data/itemStore";
+import { getSafeErrorMessage } from "../lib/redaction";
 import { applyThemeMode } from "../lib/theme";
 import { PageWorkspace } from "./PageWorkspace";
 import { ResultRow, ScrollableResultPanel } from "./ResultPanels";
@@ -108,7 +109,7 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
       setMessage("设置已保存。");
     } catch (error) {
       setMessageType("error");
-      setMessage(error instanceof Error ? error.message : "保存失败。");
+      setMessage(getSafeErrorMessage(error, "保存失败。"));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -143,7 +144,7 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
       setMessage(`核心备份已导出：${formatCoreBackupCounts(backup.counts)}。`);
     } catch (error) {
       setMessageType("error");
-      setMessage(error instanceof Error ? error.message : "导出核心备份失败。");
+      setMessage(getSafeErrorMessage(error, "导出核心备份失败。"));
     } finally {
       setBackupBusy(null);
     }
@@ -172,7 +173,7 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
       await restoreBackupFromText(selected.contents);
     } catch (error) {
       setMessageType("error");
-      setMessage(error instanceof Error ? error.message : "恢复核心备份失败。");
+      setMessage(getSafeErrorMessage(error, "恢复核心备份失败。"));
     } finally {
       setBackupBusy(null);
     }
@@ -207,7 +208,7 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
       await restoreBackupFromText(await file.text());
     } catch (error) {
       setMessageType("error");
-      setMessage(error instanceof Error ? error.message : "恢复核心备份失败。");
+      setMessage(getSafeErrorMessage(error, "恢复核心备份失败。"));
     } finally {
       setBackupBusy(null);
     }
@@ -225,7 +226,7 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
       setMessage(result || "连接正常。");
     } catch (error) {
       setMessageType("error");
-      setMessage(error instanceof Error ? error.message : "测试连接失败。");
+      setMessage(getSafeErrorMessage(error, "测试连接失败。"));
     } finally {
       testingRef.current = false;
       setTesting(false);
@@ -313,7 +314,7 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
                         setDraft(settings);
                         applyThemeMode(settings.themeMode);
                         setMessageType("error");
-                        setMessage(error instanceof Error ? error.message : "主题保存失败。");
+                        setMessage(getSafeErrorMessage(error, "主题保存失败。"));
                       })
                       .finally(() => {
                         if (themeSaveSeqRef.current !== requestSeq) return;
@@ -486,7 +487,7 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
                   ? "已检测到 DeepSeek 环境变量 Key，调用时会优先使用它。注意：Vite 环境变量不是系统钥匙串，若在打包前写入 Key，不适合把生成的应用分发给他人。"
                   : "自定义供应商使用下方手动 API Key，不读取 DeepSeek 环境变量；保存后会留在本机应用数据中。"
                 : "未检测到 DeepSeek 环境变量 Key。自定义供应商可直接填写自己的 API Key；保存后会留在本机应用数据中。"}
-              {" "}目前手动 Key 还不是系统钥匙串存储；共享设备上建议不要在本应用保存或内置 API Key。
+              {" "}目前手动 Key 还不是系统钥匙串存储；共享设备上建议不要在本应用保存或内置 API Key。连接错误会在界面显示前脱敏。
             </p>
           </div>
 
@@ -640,7 +641,7 @@ function CodexProbePanel() {
       const found = result.filter((probe) => probe.exists).length;
       setMessage(`已完成只读预检，找到 ${found} 个可访问来源。`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "预检失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "预检失败，请稍后再试。"));
       setProbes([]);
     } finally {
       probingRef.current = false;

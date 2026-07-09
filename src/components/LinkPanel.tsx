@@ -2,6 +2,7 @@ import { Brain, FileText, History, Link2, Plus, Search, Trash2, X } from "lucide
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BoundedPreview, ResultRow, ScrollableResultPanel } from "./ResultPanels";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { getSafeErrorMessage } from "../lib/redaction";
 import type { EntityKind, Item, JournalEntry, KnowledgeLink, MemoryCard, SummaryReport } from "../types";
 
 type LinkInput = Omit<KnowledgeLink, "id" | "createdAt">;
@@ -115,7 +116,7 @@ export function LinkPanel({
       setQuery("");
       setRelation("相关");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "关联失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "关联失败，请稍后再试。"));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -130,7 +131,7 @@ export function LinkPanel({
     try {
       await onDeleteLink(id);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "删除关联失败，请稍后再试。");
+      setMessage(getSafeErrorMessage(error, "删除关联失败，请稍后再试。"));
     } finally {
       deletingRef.current = false;
       setDeletingId("");

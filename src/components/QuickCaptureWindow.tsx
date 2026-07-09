@@ -22,6 +22,7 @@ import {
   setQuickCaptureSaving,
   showQuickCapturePanel,
 } from "../lib/desktop";
+import { getSafeErrorMessage } from "../lib/redaction";
 import { applyThemeMode, bindSystemThemeListener, getThemeMode } from "../lib/theme";
 
 const QUICK_CAPTURE_DRAFT_KEY = "personal-knowledge-base:quick-capture-draft:v1";
@@ -641,7 +642,8 @@ function QuickCaptureStablePanel() {
         showStatus("已留下，但悬浮窗没有自动收起，可以继续记录或手动收起。", "error");
       }, 2_800);
     } catch (error) {
-      const detail = error instanceof Error && error.message ? `：${error.message}` : "";
+      const safeError = getSafeErrorMessage(error, "");
+      const detail = safeError ? `：${safeError}` : "";
       showStatus(`没保存上，内容还在这里，可以再试${detail}`, "error");
     } finally {
       await setQuickCaptureSaving(false, saveToken).catch(() => undefined);
