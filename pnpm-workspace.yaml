@@ -2,4 +2,3 @@ allowBuilds:
   esbuild: true
 onlyBuiltDependencies:
   - esbuild
-storeDir: D:\yingyong\pnpm-store
