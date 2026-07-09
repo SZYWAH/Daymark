@@ -1334,6 +1334,7 @@ function ConversationSessionPreviewOverlay({
             { value: "claude", label: "Claude Code" },
           ]}
           onChange={(value) => setSourceFilter(value as "all" | ConversationSourceKind)}
+          triggerClassName="h-9 px-2 text-xs shadow-none"
         />
         <input
           value={dateQuery}

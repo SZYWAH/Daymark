@@ -1248,9 +1248,7 @@ function EmptyToday({ text }: { text: string }) {
 
 function TodayQuietState() {
   return (
-    <div className="mt-5 rounded-[12px] border border-line/55 bg-panel/20 px-4 py-3 text-center text-sm leading-6 text-ink/42">
-      今天还很安静。想到什么时，直接写在上面就好。
-    </div>
+    <p className="mt-4 text-center text-sm leading-6 text-ink/38">今天还很安静。</p>
   );
 }
 
