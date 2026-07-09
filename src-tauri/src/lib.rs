@@ -4028,13 +4028,13 @@ fn notify_quick_capture_saved(window: WebviewWindow, app: AppHandle, token: Opti
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let open = MenuItem::with_id(app, "open-main", "打开个人知识库", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open-main", "打开 Daymark", true, None::<&str>)?;
     let quick = MenuItem::with_id(app, "quick-capture", "快速记录 Ctrl+Shift+Space", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "toggle-quick-capture", "暂停/恢复顶部悬浮", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quick, &pause, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main-tray")
-        .tooltip("个人知识库")
+        .tooltip("Daymark")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {

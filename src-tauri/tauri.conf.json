@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "个人知识库",
-  "version": "0.1.0",
-  "identifier": "com.local.personal-knowledge-base",
+  "productName": "Daymark",
+  "version": "0.1.0-rc.1",
+  "identifier": "com.szywah.daymark",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "个人知识库",
+        "title": "Daymark",
         "width": 1280,
         "height": 820,
         "minWidth": 1100,
@@ -26,7 +26,7 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": ["nsis"]
   }
 }

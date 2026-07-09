@@ -1,7 +1,7 @@
 [package]
-name = "personal-knowledge-base"
-version = "0.1.0"
-description = "Personal knowledge base desktop shell"
+name = "daymark"
+version = "0.1.0-rc.1"
+description = "Daymark local-first desktop knowledge base"
 authors = ["local"]
 edition = "2021"
 
