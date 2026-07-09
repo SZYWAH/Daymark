@@ -1,4 +1,4 @@
-import { Check, GripHorizontal, Loader2, RotateCcw, X } from "lucide-react";
+import { AppWindow, Check, GripHorizontal, Loader2, RotateCcw, X } from "lucide-react";
 import {
   Component,
   useEffect,
@@ -16,6 +16,7 @@ import {
   hideQuickCapturePanel,
   isDesktopRuntime,
   notifyQuickCaptureSaved,
+  openMainFromQuickCapture,
   quickCaptureWindowReady,
   returnQuickCaptureToHotzone,
   setQuickCaptureDetached,
@@ -221,9 +222,12 @@ function QuickCaptureEmergencyPanel() {
               <p className="quick-capture-kicker">Quick Capture</p>
               <h1 className="quick-capture-title">快速记录暂时不可用</h1>
             </div>
-            <button className="quick-capture-icon-button" type="button" onClick={() => void hideQuickCapturePanel()} title="收起" aria-label="收起快速记录">
-              <X size={15} />
-            </button>
+            <div className="quick-capture-window-actions">
+              <QuickCaptureOpenMainButton />
+              <button className="quick-capture-icon-button" type="button" onClick={() => void hideQuickCapturePanel()} title="收起" aria-label="收起快速记录">
+                <X size={15} />
+              </button>
+            </div>
           </header>
           <div className="quick-capture-input flex items-center text-sm text-white/58">
             这次悬浮窗渲染失败了。草稿仍保留在本地，重新打开快速记录即可继续。
@@ -234,6 +238,41 @@ function QuickCaptureEmergencyPanel() {
         </div>
       </div>
     </main>
+  );
+}
+
+function QuickCaptureOpenMainButton({
+  disabled = false,
+  onError,
+}: {
+  disabled?: boolean;
+  onError?: (error: unknown) => void;
+}) {
+  const [opening, setOpening] = useState(false);
+  const buttonDisabled = disabled || opening;
+
+  const openMain = async () => {
+    if (buttonDisabled) return;
+    setOpening(true);
+    try {
+      await openMainFromQuickCapture();
+    } catch (error) {
+      setOpening(false);
+      onError?.(error);
+    }
+  };
+
+  return (
+    <button
+      className="quick-capture-icon-button"
+      type="button"
+      disabled={buttonDisabled}
+      onClick={() => void openMain()}
+      title="打开 Daymark"
+      aria-label="打开 Daymark"
+    >
+      <AppWindow size={14} />
+    </button>
   );
 }
 
@@ -685,6 +724,14 @@ function QuickCaptureStablePanel() {
               </span>
             </button>
             <div className="quick-capture-window-actions">
+              <QuickCaptureOpenMainButton
+                disabled={saving || savedClosing}
+                onError={(error) => {
+                  const safeError = getSafeErrorMessage(error, "");
+                  const detail = safeError ? `：${safeError}` : "";
+                  showStatus(`没打开 Daymark，可以再试${detail}`, "error");
+                }}
+              />
               {detached && (
                 <button className="quick-capture-icon-button" type="button" onClick={() => void returnToHotzone()} title="回到顶部热区" aria-label="回到顶部热区并收起快速记录">
                   <RotateCcw size={14} />

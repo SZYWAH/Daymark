@@ -709,6 +709,10 @@ button {
     @apply relative z-10 flex h-7 w-7 items-center justify-center rounded-full border border-white/[0.14] bg-white/[0.08] text-white/[0.66] shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] transition hover:bg-white/[0.15] hover:text-white;
   }
 
+  .quick-capture-icon-button:disabled {
+    @apply cursor-not-allowed opacity-45 hover:bg-white/[0.08] hover:text-white/[0.66];
+  }
+
   .quick-capture-icon-button:focus-visible {
     @apply outline-none ring-2 ring-white/35 ring-offset-0;
   }
@@ -802,6 +806,12 @@ button {
     background: rgba(255, 255, 255, 0.54);
     color: rgba(32, 40, 50, 0.58);
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.70);
+  }
+
+  :root[data-theme="light"] .quick-capture-icon-button:disabled,
+  :root[data-theme="light"] .quick-capture-icon-button:disabled:hover {
+    background: rgba(255, 255, 255, 0.54);
+    color: rgba(32, 40, 50, 0.58);
   }
 
   :root[data-theme="light"] .quick-capture-primary {

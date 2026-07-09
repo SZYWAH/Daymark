@@ -3829,6 +3829,20 @@ fn show_main(app: &AppHandle) -> Result<(), String> {
     }
 }
 
+fn open_main_from_quick_capture_impl(app: &AppHandle) -> Result<(), String> {
+    if current_panel_is_saving() {
+        return Err("快速记录正在保存，请稍后再打开 Daymark".into());
+    }
+
+    let main = main_window(app)?;
+    set_quick_capture_state(QuickCaptureState::MainVisible);
+    hide_quick_capture_windows(app);
+    main.show().map_err(|error| error.to_string())?;
+    main.unminimize().map_err(|error| error.to_string())?;
+    remember_quick_capture_monitor(app).ok();
+    main.set_focus().map_err(|error| error.to_string())
+}
+
 fn route_second_launch_to_main(app: &AppHandle) {
     let app_handle = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -3997,6 +4011,12 @@ fn sync_quick_capture_lifecycle_on_main(app: &AppHandle) {
 fn show_main_window(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
     ensure_quick_capture_window(&window)?;
     show_main(&app)
+}
+
+#[tauri::command]
+fn open_main_from_quick_capture(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
+    ensure_quick_capture_window(&window)?;
+    open_main_from_quick_capture_impl(&app)
 }
 
 #[tauri::command]
@@ -4592,6 +4612,7 @@ pub fn run() {
             cancel_codex_review_job,
             cancel_conversation_review_job,
             show_main_window,
+            open_main_from_quick_capture,
             hide_main_to_tray,
             show_quick_capture,
             show_quick_capture_hotzone,
