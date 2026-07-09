@@ -257,8 +257,9 @@ function QuickCaptureOpenMainButton({
     try {
       await openMainFromQuickCapture();
     } catch (error) {
-      setOpening(false);
       onError?.(error);
+    } finally {
+      setOpening(false);
     }
   };
 
