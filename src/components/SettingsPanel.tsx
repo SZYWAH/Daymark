@@ -36,11 +36,15 @@ import { applyThemeMode } from "../lib/theme";
 import { PageWorkspace } from "./PageWorkspace";
 import { ResultRow, ScrollableResultPanel } from "./ResultPanels";
 import { SelectMenu } from "./SelectMenu";
-import type { AiSettings, ConversationSourceProbe } from "../types";
+import type { AiSettings, AutoWorkReviewSettings, ConversationSourceKind, ConversationSourceProbe } from "../types";
 
 type SettingsPanelProps = {
   settings: AiSettings;
+  autoWorkReviewSettings: AutoWorkReviewSettings | null;
+  autoWorkReviewRunning: boolean;
   onSave: (settings: AiSettings) => Promise<void>;
+  onSaveAutoWorkReviewSettings: (patch: Partial<AutoWorkReviewSettings>) => Promise<AutoWorkReviewSettings>;
+  onRunAutoWorkReview: () => Promise<unknown>;
   onDirtyChange?: (dirty: boolean) => void;
   onRestoreCoreBackup: (backup: DaymarkCoreBackupV1) => Promise<DaymarkCoreBackupCounts | null>;
 };
@@ -67,7 +71,16 @@ function hasNonThemeSettingsChanges(draft: AiSettings, settings: AiSettings) {
   return JSON.stringify(draftWithoutTheme) !== JSON.stringify(settingsWithoutTheme);
 }
 
-export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBackup }: SettingsPanelProps) {
+export function SettingsPanel({
+  settings,
+  autoWorkReviewSettings,
+  autoWorkReviewRunning,
+  onSave,
+  onSaveAutoWorkReviewSettings,
+  onRunAutoWorkReview,
+  onDirtyChange,
+  onRestoreCoreBackup,
+}: SettingsPanelProps) {
   const [draft, setDraft] = useState(settings);
   const [saving, setSaving] = useState(false);
   const [themeSaving, setThemeSaving] = useState(false);
@@ -101,6 +114,11 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
     () => JSON.stringify(normalizeSettingsForDirty(draft)) !== JSON.stringify(normalizeSettingsForDirty(settings)),
     [draft, settings],
   );
+  const autoWorkReviewEnabled = Boolean(autoWorkReviewSettings?.enabled);
+  const autoSourceKinds = autoWorkReviewSettings?.sourceKinds ?? ["codex", "claude"];
+  const autoWorkReviewStatus = autoWorkReviewRunning
+    ? "正在更新今日工作内容。"
+    : autoWorkReviewSettings?.lastMessage || "默认关闭；开启后 Daymark 运行期间每 30 分钟自动更新。";
 
   useEffect(() => {
     setDraft(settings);
@@ -158,6 +176,16 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
       savingRef.current = false;
       setSaving(false);
     }
+  };
+
+  const toggleAutoWorkReviewSource = async (source: ConversationSourceKind) => {
+    const current = new Set(autoSourceKinds);
+    if (current.has(source) && current.size > 1) {
+      current.delete(source);
+    } else {
+      current.add(source);
+    }
+    await onSaveAutoWorkReviewSettings({ sourceKinds: Array.from(current) });
   };
 
   const exportBackup = async () => {
@@ -421,10 +449,71 @@ export function SettingsPanel({ settings, onSave, onDirtyChange, onRestoreCoreBa
         </div>
 
         <div className="section-surface space-y-4 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Automation</p>
+              <h3 className="mt-1 text-base font-semibold text-ink">自动工作回顾</h3>
+              <p className="mt-1 text-sm leading-6 text-ink/52">
+                开启后会读取本机 Codex 与 Claude Code 今日新增对话正文，先本地脱敏，再发送给当前 AI 服务合并进今日工作内容。
+              </p>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-ink/70">
+              <input
+                type="checkbox"
+                checked={autoWorkReviewEnabled}
+                onChange={(event) => void onSaveAutoWorkReviewSettings({ enabled: event.target.checked })}
+                className="control-checkbox"
+              />
+              开启
+            </label>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {[
+              { source: "codex" as const, label: "Codex" },
+              { source: "claude" as const, label: "Claude Code" },
+            ].map(({ source, label }) => (
+              <label key={source} className="flex items-center gap-2 rounded-[8px] border border-line bg-panel/70 px-3 py-2 text-sm text-ink/70">
+                <input
+                  type="checkbox"
+                  checked={autoSourceKinds.includes(source)}
+                  disabled={!autoWorkReviewEnabled || (autoSourceKinds.includes(source) && autoSourceKinds.length <= 1)}
+                  onChange={() => void toggleAutoWorkReviewSource(source)}
+                  className="control-checkbox"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-line bg-panel/70 p-3">
+            <div className="min-w-0 text-xs leading-5 text-ink/52">
+              <div>{autoWorkReviewStatus}</div>
+              <div>
+                固定间隔：30 分钟
+                {autoWorkReviewSettings?.lastRunAt ? ` · 上次运行：${autoWorkReviewSettings.lastRunAt}` : ""}
+              </div>
+            </div>
+            <button
+              className="soft-button flex h-9 shrink-0 items-center gap-1.5 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!autoWorkReviewEnabled || autoWorkReviewRunning}
+              onClick={() => void onRunAutoWorkReview()}
+            >
+              {autoWorkReviewRunning ? <RefreshCw size={14} className="animate-spin" /> : <Bot size={14} />}
+              {autoWorkReviewRunning ? "更新中" : "立即更新"}
+            </button>
+          </div>
+
+          <p className="text-xs leading-5 text-ink/42">
+            自动工作回顾默认关闭；不会自动写入长期记忆，也不会进入核心备份。关闭后不会继续读取对话正文或调用 AI。
+          </p>
+        </div>
+
+        <div className="section-surface space-y-4 p-5">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">AI Provider</p>
             <h3 className="mt-1 text-base font-semibold text-ink">AI 整理</h3>
-            <p className="mt-1 text-sm leading-6 text-ink/52">只在你点击总结、提炼或整理时调用，不做后台自动请求。</p>
+            <p className="mt-1 text-sm leading-6 text-ink/52">手动整理只在你点击时调用；若开启自动工作回顾，会按上方设置定时调用。</p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">

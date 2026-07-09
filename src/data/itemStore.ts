@@ -2,6 +2,8 @@ import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import {
   PROCESS_STATUSES,
   READING_STATUSES,
+  type AutoWorkReviewCursor,
+  type AutoWorkReviewSettings,
   type AiSettings,
   type CodexDailyReview,
   type ConversationGenerationDraft,
@@ -23,6 +25,8 @@ import {
   type MemoryStatus,
   type ProcessStatus,
   type ReadingStatus,
+  type RollingWorkReview,
+  type RollingWorkReviewStatus,
   type SearchResult,
   type SummaryReport,
   type TodayDashboardData,
@@ -30,7 +34,7 @@ import {
 import { getThemeMode, saveThemeMode } from "../lib/theme";
 
 const DB_NAME = "personal-knowledge-base";
-const DB_VERSION = 10;
+const DB_VERSION = 11;
 const ITEM_STORE = "items";
 const SETTINGS_STORE = "settings";
 const FOLDER_STORE = "folders";
@@ -45,6 +49,9 @@ const DAILY_REVIEW_DRAFT_STORE = "dailyReviewReplacementDrafts";
 const CONVERSATION_GENERATION_DRAFT_STORE = "conversationGenerationDrafts";
 const MEMORY_DOCUMENT_STORE = "memoryDocuments";
 const MEMORY_PATCH_STORE = "memoryPatchDrafts";
+const AUTO_WORK_REVIEW_SETTINGS_STORE = "autoWorkReviewSettings";
+const AUTO_WORK_REVIEW_CURSOR_STORE = "autoWorkReviewCursors";
+const ROLLING_WORK_REVIEW_STORE = "rollingWorkReviews";
 export const DAYMARK_CORE_BACKUP_SCHEMA = "daymark.core-backup.v1";
 const CORE_BACKUP_STORE_NAMES = [
   ITEM_STORE,
@@ -81,6 +88,8 @@ type CreateConversationGenerationDraftInput = Omit<ConversationGenerationDraft, 
 type ConversationGenerationDraftPatch = Partial<Omit<ConversationGenerationDraft, "id" | "createdAt" | "updatedAt">>;
 type CreateMemoryPatchDraftInput = Omit<MemoryPatchDraft, "id" | "createdAt" | "updatedAt">;
 type MemoryPatchDraftPatch = Partial<Omit<MemoryPatchDraft, "id" | "createdAt" | "updatedAt">>;
+type AutoWorkReviewSettingsPatch = Partial<Omit<AutoWorkReviewSettings, "id" | "intervalMinutes" | "updatedAt">>;
+type RollingWorkReviewInput = Omit<RollingWorkReview, "id" | "createdAt" | "updatedAt">;
 type ApplyMemoryPatchOptions = {
   expectedDocumentUpdatedAt?: string;
   expectedDocumentContent?: string;
@@ -247,6 +256,28 @@ interface KnowledgeBaseDb extends DBSchema {
       "by-updatedAt": string;
     };
   };
+  autoWorkReviewSettings: {
+    key: "auto-work-review";
+    value: AutoWorkReviewSettings;
+  };
+  autoWorkReviewCursors: {
+    key: string;
+    value: AutoWorkReviewCursor;
+    indexes: {
+      "by-date": string;
+      "by-sourceKind": ConversationSourceKind;
+      "by-updatedAt": string;
+    };
+  };
+  rollingWorkReviews: {
+    key: string;
+    value: RollingWorkReview;
+    indexes: {
+      "by-date": string;
+      "by-status": RollingWorkReviewStatus;
+      "by-updatedAt": string;
+    };
+  };
 }
 
 let dbPromise: Promise<IDBPDatabase<KnowledgeBaseDb>> | undefined;
@@ -352,6 +383,34 @@ function getDb() {
         if (!store.indexNames.contains("by-status")) store.createIndex("by-status", "status");
         if (!store.indexNames.contains("by-updatedAt")) store.createIndex("by-updatedAt", "updatedAt");
       }
+
+      if (!db.objectStoreNames.contains(AUTO_WORK_REVIEW_SETTINGS_STORE)) {
+        db.createObjectStore(AUTO_WORK_REVIEW_SETTINGS_STORE, { keyPath: "id" });
+      }
+
+      if (!db.objectStoreNames.contains(AUTO_WORK_REVIEW_CURSOR_STORE)) {
+        const store = db.createObjectStore(AUTO_WORK_REVIEW_CURSOR_STORE, { keyPath: "sessionId" });
+        store.createIndex("by-date", "date");
+        store.createIndex("by-sourceKind", "sourceKind");
+        store.createIndex("by-updatedAt", "updatedAt");
+      } else {
+        const store = transaction.objectStore(AUTO_WORK_REVIEW_CURSOR_STORE);
+        if (!store.indexNames.contains("by-date")) store.createIndex("by-date", "date");
+        if (!store.indexNames.contains("by-sourceKind")) store.createIndex("by-sourceKind", "sourceKind");
+        if (!store.indexNames.contains("by-updatedAt")) store.createIndex("by-updatedAt", "updatedAt");
+      }
+
+      if (!db.objectStoreNames.contains(ROLLING_WORK_REVIEW_STORE)) {
+        const store = db.createObjectStore(ROLLING_WORK_REVIEW_STORE, { keyPath: "id" });
+        store.createIndex("by-date", "date");
+        store.createIndex("by-status", "status");
+        store.createIndex("by-updatedAt", "updatedAt");
+      } else {
+        const store = transaction.objectStore(ROLLING_WORK_REVIEW_STORE);
+        if (!store.indexNames.contains("by-date")) store.createIndex("by-date", "date");
+        if (!store.indexNames.contains("by-status")) store.createIndex("by-status", "status");
+        if (!store.indexNames.contains("by-updatedAt")) store.createIndex("by-updatedAt", "updatedAt");
+      }
     },
   });
 
@@ -399,6 +458,98 @@ export function getDefaultAiSettings(): AiSettings {
     themeMode: getThemeMode(),
     updatedAt: formatTimestamp(),
   };
+}
+
+export function getDefaultAutoWorkReviewSettings(): AutoWorkReviewSettings {
+  return {
+    id: "auto-work-review",
+    enabled: false,
+    sourceKinds: ["codex", "claude"],
+    intervalMinutes: 30,
+    lastStatus: "idle",
+    updatedAt: formatTimestamp(),
+  };
+}
+
+export async function getAutoWorkReviewSettings() {
+  const db = await getDb();
+  const saved = await db.get(AUTO_WORK_REVIEW_SETTINGS_STORE, "auto-work-review");
+  return normalizeAutoWorkReviewSettings(saved);
+}
+
+export async function saveAutoWorkReviewSettings(patch: AutoWorkReviewSettingsPatch) {
+  const db = await getDb();
+  const current = await getAutoWorkReviewSettings();
+  const next = normalizeAutoWorkReviewSettings({
+    ...current,
+    ...patch,
+    id: "auto-work-review",
+    intervalMinutes: 30,
+    updatedAt: formatTimestamp(),
+  });
+  await db.put(AUTO_WORK_REVIEW_SETTINGS_STORE, next);
+  return next;
+}
+
+export async function getAutoWorkReviewCursors() {
+  const db = await getDb();
+  const cursors = await db.getAll(AUTO_WORK_REVIEW_CURSOR_STORE);
+  return cursors.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function getAutoWorkReviewCursorsBySessionIds(sessionIds: string[]) {
+  const db = await getDb();
+  const uniqueIds = Array.from(new Set(sessionIds.map((id) => id.trim()).filter(Boolean)));
+  const records = await Promise.all(uniqueIds.map((id) => db.get(AUTO_WORK_REVIEW_CURSOR_STORE, id)));
+  return records.filter((cursor): cursor is AutoWorkReviewCursor => Boolean(cursor));
+}
+
+export async function upsertAutoWorkReviewCursors(cursors: AutoWorkReviewCursor[]) {
+  if (cursors.length === 0) return [];
+  const db = await getDb();
+  const tx = db.transaction(AUTO_WORK_REVIEW_CURSOR_STORE, "readwrite");
+  const now = formatTimestamp();
+  const saved = cursors.map((cursor) => ({
+    ...cursor,
+    readOffset: Math.max(0, Math.floor(cursor.readOffset || 0)),
+    modifiedAt: Math.max(0, Math.floor(cursor.modifiedAt || 0)),
+    updatedAt: now,
+  }));
+  await Promise.all(saved.map((cursor) => tx.store.put(cursor)));
+  await tx.done;
+  return saved;
+}
+
+export async function getRollingWorkReviewByDate(date: string) {
+  const db = await getDb();
+  return db.get(ROLLING_WORK_REVIEW_STORE, date);
+}
+
+export async function getRollingWorkReviews() {
+  const db = await getDb();
+  const reviews = await db.getAll(ROLLING_WORK_REVIEW_STORE);
+  return reviews.sort((a, b) => b.date.localeCompare(a.date) || b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function upsertRollingWorkReview(input: RollingWorkReviewInput) {
+  const db = await getDb();
+  const now = formatTimestamp();
+  const existing = await db.get(ROLLING_WORK_REVIEW_STORE, input.date);
+  const review: RollingWorkReview = {
+    id: input.date,
+    createdAt: existing?.createdAt ?? now,
+    ...existing,
+    ...input,
+    date: input.date,
+    title: input.title.trim() || `${input.date} 今日工作内容`,
+    content: input.content.trim(),
+    sourceKinds: normalizeConversationSourceKinds(input.sourceKinds),
+    processedSessionCount: Math.max(0, Math.floor(input.processedSessionCount || 0)),
+    processedChars: Math.max(0, Math.floor(input.processedChars || 0)),
+    updatedAt: now,
+  };
+  await db.put(ROLLING_WORK_REVIEW_STORE, review);
+  return review;
 }
 
 export async function exportCoreBackup(): Promise<DaymarkCoreBackupV1> {
@@ -1811,6 +1962,27 @@ function getReviewSourceLabel(reviewKind: ConversationReviewKind, sourceKind?: C
   if (reviewKind === "combined") return "综合";
   if (sourceKind === "claude") return "Claude Code";
   return "Codex";
+}
+
+function normalizeConversationSourceKinds(sourceKinds?: ConversationSourceKind[]) {
+  const normalized = Array.from(
+    new Set((sourceKinds ?? []).filter((source): source is ConversationSourceKind => source === "codex" || source === "claude")),
+  );
+  return normalized.length > 0 ? normalized : (["codex", "claude"] as ConversationSourceKind[]);
+}
+
+function normalizeAutoWorkReviewSettings(saved?: Partial<AutoWorkReviewSettings>): AutoWorkReviewSettings {
+  const defaults = getDefaultAutoWorkReviewSettings();
+  return {
+    ...defaults,
+    ...saved,
+    id: "auto-work-review",
+    enabled: Boolean(saved?.enabled),
+    sourceKinds: normalizeConversationSourceKinds(saved?.sourceKinds),
+    intervalMinutes: 30,
+    lastStatus: saved?.lastStatus ?? defaults.lastStatus,
+    updatedAt: saved?.updatedAt ?? defaults.updatedAt,
+  };
 }
 
 function normalizeConversationSessionIndex(record: ConversationSessionIndex): ConversationSessionIndex {

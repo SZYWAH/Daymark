@@ -7,6 +7,8 @@ import type {
   CodexSessionMeta,
   CodexSourceProbe,
   ConversationReviewInput,
+  ConversationSessionDelta,
+  ConversationSessionDeltaCursorInput,
   ConversationSessionDay,
   ConversationSessionIndex,
   ConversationSessionIndexOptions,
@@ -252,6 +254,18 @@ export async function readSelectedConversationSessions(
   }
 
   return invoke<ConversationReviewInput>("read_selected_conversation_sessions", { sessionIds, jobId });
+}
+
+export async function readConversationSessionDeltas(
+  sessionIds: string[],
+  cursors: ConversationSessionDeltaCursorInput[],
+  jobId?: string,
+): Promise<ConversationSessionDelta[]> {
+  if (!isDesktopRuntime()) {
+    throw new Error("自动工作回顾需要在桌面端使用。");
+  }
+
+  return invoke<ConversationSessionDelta[]>("read_conversation_session_deltas", { sessionIds, cursors, jobId });
 }
 
 export async function cancelCodexReviewJob(jobId: string) {

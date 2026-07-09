@@ -30,6 +30,7 @@ import { toDateKey } from "../lib/date";
 import { getSafeErrorMessage } from "../lib/redaction";
 import type {
   AiSettings,
+  AutoWorkReviewSettings,
   CodexDailyReview,
   CodexReviewInput,
   CodexSessionIndex,
@@ -38,6 +39,7 @@ import type {
   EntityKind,
   MemorySubView,
   MemoryPatchDraft,
+  RollingWorkReview,
   SmartView,
   TodayDashboardData,
 } from "../types";
@@ -52,6 +54,10 @@ type TodayPageProps = {
   data: TodayDashboardData | null;
   loading: boolean;
   settings: AiSettings | null;
+  autoWorkReviewSettings: AutoWorkReviewSettings | null;
+  rollingWorkReview: RollingWorkReview | null;
+  autoWorkReviewRunning: boolean;
+  autoWorkReviewProgress: CodexReviewProgress | null;
   codexReviews: CodexDailyReview[];
   memoryPatchDrafts: MemoryPatchDraft[];
   conversationGenerationDrafts: ConversationGenerationDraft[];
@@ -61,6 +67,7 @@ type TodayPageProps = {
   onOpenLibraryView: (view: SmartView) => void;
   onOpenJournalPage: () => void;
   onOpenMemoryPage: (subView?: MemorySubView) => void;
+  onRunAutoWorkReview: () => Promise<unknown>;
   onReplaceCodexSessionIndex: (records: CodexSessionIndex[]) => Promise<void>;
   onGenerateCodexReview: (
     input: CodexReviewInput,
@@ -107,6 +114,10 @@ export function TodayPage({
   data,
   loading,
   settings,
+  autoWorkReviewSettings,
+  rollingWorkReview,
+  autoWorkReviewRunning,
+  autoWorkReviewProgress,
   codexReviews,
   memoryPatchDrafts,
   conversationGenerationDrafts,
@@ -116,6 +127,7 @@ export function TodayPage({
   onOpenLibraryView,
   onOpenJournalPage,
   onOpenMemoryPage,
+  onRunAutoWorkReview,
   onReplaceCodexSessionIndex,
   onGenerateCodexReview,
   onGenerateCombinedReview,
@@ -234,6 +246,14 @@ export function TodayPage({
                 onSelect={(panel) => setDetailsPanel((current) => (current === panel ? null : panel))}
               />
 
+              <RollingWorkReviewCard
+                settings={autoWorkReviewSettings}
+                review={rollingWorkReview}
+                running={autoWorkReviewRunning}
+                progress={autoWorkReviewProgress}
+                onRun={onRunAutoWorkReview}
+              />
+
               {quietToday && !detailsPanel && <TodayQuietState />}
 
               {detailsPanel && (
@@ -327,6 +347,75 @@ export function TodayPage({
     </PageWorkspace>
   );
 }
+
+function RollingWorkReviewCard({
+  settings,
+  review,
+  running,
+  progress,
+  onRun,
+}: {
+  settings: AutoWorkReviewSettings | null;
+  review: RollingWorkReview | null;
+  running: boolean;
+  progress: CodexReviewProgress | null;
+  onRun: () => Promise<unknown>;
+}) {
+  const enabled = Boolean(settings?.enabled);
+  const sourceText = settings?.sourceKinds.includes("codex") && settings.sourceKinds.includes("claude")
+    ? "Codex、Claude Code"
+    : settings?.sourceKinds.includes("claude")
+      ? "Claude Code"
+      : "Codex";
+  const statusText = running
+    ? progress?.message || "正在更新今日工作内容。"
+    : enabled
+      ? settings?.lastMessage || "已开启，Daymark 运行期间每 30 分钟自动更新。"
+      : "未开启；可在设置页启用自动工作回顾。";
+  const content = review?.content.trim();
+
+  return (
+    <section className="today-module mt-4 rounded-[8px] border border-line bg-panel/70 p-4 shadow-card">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-semibold text-ink">
+            <Bot size={16} className="text-copper" />
+            今日工作内容
+          </div>
+          <p className="mt-1 text-xs leading-5 text-ink/45">
+            {statusText}
+          </p>
+        </div>
+        <button
+          className="soft-button flex h-8 shrink-0 items-center gap-1.5 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!enabled || running}
+          onClick={() => void onRun()}
+        >
+          {running ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+          {running ? "更新中" : "立即更新"}
+        </button>
+      </div>
+
+      {content ? (
+        <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface p-3 text-anywhere text-xs leading-6 text-ink/66 scrollbar-thin">
+          {content}
+        </div>
+      ) : (
+        <div className="rounded-[8px] border border-dashed border-line bg-surface/70 p-3 text-center text-xs leading-5 text-ink/42">
+          开启后，这里会持续维护当天同一份工作内容。
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink/42">
+        <span>{sourceText}</span>
+        {review?.lastRunAt && <span>更新于 {review.lastRunAt}</span>}
+        {review && <span>{review.processedSessionCount} 次会话增量</span>}
+        {review && <span>{review.processedChars.toLocaleString("zh-CN")} 字符</span>}
+      </div>
+    </section>
+  );
+}
+
 function TodayInlineShortcuts({
   active,
   writtenCount,

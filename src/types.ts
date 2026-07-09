@@ -286,6 +286,71 @@ export type ConversationReviewInput = {
   truncated: boolean;
 };
 
+export type AutoWorkReviewStatus = "idle" | "running" | "success" | "paused" | "error";
+
+export type AutoWorkReviewSettings = {
+  id: "auto-work-review";
+  enabled: boolean;
+  sourceKinds: ConversationSourceKind[];
+  intervalMinutes: 30;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastStatus: AutoWorkReviewStatus;
+  lastMessage?: string;
+  updatedAt: string;
+};
+
+export type AutoWorkReviewCursor = {
+  sessionId: string;
+  path: string;
+  sourceKind: ConversationSourceKind;
+  date: string;
+  readOffset: number;
+  modifiedAt: number;
+  lastProcessedAt?: string;
+  error?: string;
+  updatedAt: string;
+};
+
+export type RollingWorkReviewStatus = "empty" | "updating" | "ready" | "error";
+
+export type RollingWorkReview = {
+  id: string;
+  date: string;
+  title: string;
+  content: string;
+  sourceKinds: ConversationSourceKind[];
+  processedSessionCount: number;
+  processedChars: number;
+  lastRunAt?: string;
+  status: RollingWorkReviewStatus;
+  message?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConversationSessionDeltaCursorInput = {
+  sessionId: string;
+  readOffset: number;
+};
+
+export type ConversationSessionDelta = {
+  sessionId: string;
+  sourceKind: ConversationSourceKind;
+  sourceLabel: string;
+  date: string;
+  path: string;
+  previousReadOffset: number;
+  nextReadOffset: number;
+  modifiedAt: number;
+  transcript: string;
+  charCount: number;
+  messageCount: number;
+  redacted: boolean;
+  truncated: boolean;
+  reset: boolean;
+};
+
 export type DailyConversationReview = {
   id: string;
   reviewKey: string;

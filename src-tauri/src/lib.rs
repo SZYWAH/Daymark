@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -255,6 +255,32 @@ struct CodexReviewInput {
     total_chars: usize,
     redacted: bool,
     truncated: bool,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ConversationSessionDeltaCursor {
+    session_id: String,
+    read_offset: u64,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ConversationSessionDelta {
+    session_id: String,
+    source_kind: String,
+    source_label: String,
+    date: String,
+    path: String,
+    previous_read_offset: u64,
+    next_read_offset: u64,
+    modified_at: u64,
+    transcript: String,
+    char_count: usize,
+    message_count: usize,
+    redacted: bool,
+    truncated: bool,
+    reset: bool,
 }
 
 fn ensure_main_window(window: &WebviewWindow) -> Result<(), String> {
@@ -1163,6 +1189,44 @@ fn read_selected_conversation_sessions(window: WebviewWindow, session_ids: Vec<S
     read_selected_sessions_for_review(session_ids, job_id, None)
 }
 
+#[tauri::command]
+fn read_conversation_session_deltas(
+    window: WebviewWindow,
+    session_ids: Vec<String>,
+    cursors: Option<Vec<ConversationSessionDeltaCursor>>,
+    job_id: Option<String>,
+) -> Result<Vec<ConversationSessionDelta>, String> {
+    ensure_main_window(&window)?;
+    let requested: HashSet<String> = session_ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if requested.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let cursor_map: BTreeMap<String, u64> = cursors
+        .unwrap_or_default()
+        .into_iter()
+        .map(|cursor| (cursor.session_id, cursor.read_offset))
+        .collect();
+    let mut sessions: Vec<_> = collect_conversation_sessions(None)?
+        .into_iter()
+        .filter(|session| requested.contains(&session.id))
+        .collect();
+    sessions.sort_by(|a, b| a.date.cmp(&b.date).then(a.modified_at.cmp(&b.modified_at)));
+
+    let mut result = Vec::new();
+    for session in sessions {
+        ensure_codex_job_not_cancelled(job_id.as_deref())?;
+        let offset = cursor_map.get(&session.id).copied().unwrap_or(0);
+        result.push(read_session_delta(&session, offset, job_id.as_deref())?);
+    }
+    clear_codex_job_if_needed(job_id.as_deref())?;
+    Ok(result)
+}
+
 fn read_selected_sessions_for_review(
     session_ids: Vec<String>,
     job_id: Option<String>,
@@ -1385,6 +1449,112 @@ fn append_session_transcript(
     }
 
     Ok(SessionTranscriptResult { redacted, truncated })
+}
+
+fn read_session_delta(
+    session: &CodexSessionMeta,
+    requested_offset: u64,
+    job_id: Option<&str>,
+) -> Result<ConversationSessionDelta, String> {
+    let path = Path::new(&session.path);
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("无法读取会话元信息：{}，{}", session.path, error))?;
+    let file_len = metadata.len();
+    let reset = requested_offset > file_len;
+    let previous_read_offset = if reset { 0 } else { requested_offset };
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("无法读取会话：{}，{}", session.path, error))?;
+    file.seek(SeekFrom::Start(previous_read_offset))
+        .map_err(|error| format!("定位会话增量失败：{}，{}", session.path, error))?;
+
+    let max_raw = CONVERSATION_REVIEW_MAX_SESSION_RAW_BYTES as u64;
+    let mut limited = file.take(max_raw + 1);
+    let mut buffer = Vec::new();
+    limited
+        .read_to_end(&mut buffer)
+        .map_err(|error| format!("读取会话增量失败：{}，{}", session.path, error))?;
+    let mut truncated = buffer.len() as u64 > max_raw;
+    if truncated {
+        buffer.truncate(max_raw as usize);
+    }
+
+    let complete_len = complete_jsonl_prefix_len(&buffer);
+    let next_read_offset = previous_read_offset + complete_len as u64;
+    let mut transcript = String::new();
+    let mut char_count = 0usize;
+    let mut message_count = 0usize;
+    let mut redacted = false;
+
+    if complete_len > 0 {
+        let text = String::from_utf8_lossy(&buffer[..complete_len]);
+        let project_line = session_project_label(session)
+            .map(|label| format!("项目：{}", label))
+            .unwrap_or_default();
+        let header = format!("来源：{}\n会话：{}\n时间：{}\n{}\n", session.source_label, session.id, session.date, project_line);
+        push_limited(&mut transcript, &mut char_count, &header);
+
+        for line in text.lines() {
+            ensure_codex_job_not_cancelled(job_id)?;
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let extracted = if session.source_kind == "claude" {
+                extract_claude_message(&value)
+            } else {
+                extract_codex_message(&value)
+            };
+            let Some((role, text)) = extracted else {
+                continue;
+            };
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let (safe_text, did_redact) = redact_sensitive_text(text);
+            redacted = redacted || did_redact;
+            push_limited(
+                &mut transcript,
+                &mut char_count,
+                &format!("\n[{}]\n{}\n", role_label(role, &session.source_kind), safe_text),
+            );
+            message_count += 1;
+            if char_count >= CONVERSATION_REVIEW_MAX_TOTAL_CHARS {
+                truncated = true;
+                break;
+            }
+        }
+    }
+
+    Ok(ConversationSessionDelta {
+        session_id: session.id.clone(),
+        source_kind: session.source_kind.clone(),
+        source_label: session.source_label.clone(),
+        date: session.date.clone(),
+        path: session.path.clone(),
+        previous_read_offset,
+        next_read_offset,
+        modified_at: metadata_millis(&metadata),
+        transcript,
+        char_count,
+        message_count,
+        redacted,
+        truncated,
+        reset,
+    })
+}
+
+fn complete_jsonl_prefix_len(buffer: &[u8]) -> usize {
+    if buffer.is_empty() {
+        return 0;
+    }
+    if buffer.last() == Some(&b'\n') {
+        return buffer.len();
+    }
+    buffer
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map(|index| index + 1)
+        .unwrap_or(0)
 }
 
 fn push_limited(output: &mut String, output_chars: &mut usize, value: &str) {
@@ -4097,8 +4267,10 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         ai_api_key_account, classify_file_text_quality, finalize_file_text,
-        normalize_ai_key_base_url, office_xml_to_text, redact_sensitive_text, FILE_TEXT_MAX_CHARS,
+        normalize_ai_key_base_url, office_xml_to_text, read_session_delta, redact_sensitive_text,
+        CodexSessionMeta, FILE_TEXT_MAX_CHARS,
     };
+    use std::fs;
 
     #[test]
     fn office_xml_to_text_extracts_wordprocessing_text_nodes() {
@@ -4199,6 +4371,60 @@ mod tests {
         assert_ne!(deepseek, other_url);
         assert!(deepseek.starts_with("deepseek:"));
         assert!(compatible.starts_with("openai-compatible:"));
+    }
+
+    #[test]
+    fn session_delta_reads_only_complete_new_jsonl_lines() {
+        let path = std::env::temp_dir().join(format!("daymark-delta-{}.jsonl", std::process::id()));
+        let first = r#"{"payload":{"type":"message","role":"user","content":[{"text":"first note"}]}}"#;
+        let second = r#"{"payload":{"type":"message","role":"assistant","content":[{"text":"api_key=sk-test-secret-1234567890"}]}}"#;
+        fs::write(&path, format!("{}\n{} incomplete", first, second)).unwrap();
+
+        let session = test_codex_session(&path);
+        let delta = read_session_delta(&session, 0, None).unwrap();
+
+        assert_eq!(delta.message_count, 1);
+        assert!(delta.transcript.contains("first note"));
+        assert!(!delta.transcript.contains("sk-test-secret"));
+        assert_eq!(delta.next_read_offset, first.len() as u64 + 1);
+
+        fs::write(&path, format!("{}\n{}\n", first, second)).unwrap();
+        let delta = read_session_delta(&session, delta.next_read_offset, None).unwrap();
+
+        assert_eq!(delta.message_count, 1);
+        assert!(delta.redacted);
+        assert!(delta.transcript.contains("已脱敏") || delta.transcript.contains("宸茶劚"));
+        assert!(!delta.transcript.contains("sk-test-secret"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn session_delta_resets_when_offset_is_beyond_file_length() {
+        let path = std::env::temp_dir().join(format!("daymark-delta-reset-{}.jsonl", std::process::id()));
+        let line = r#"{"payload":{"type":"message","role":"user","content":[{"text":"after rewrite"}]}}"#;
+        fs::write(&path, format!("{}\n", line)).unwrap();
+
+        let session = test_codex_session(&path);
+        let delta = read_session_delta(&session, 10_000, None).unwrap();
+
+        assert!(delta.reset);
+        assert_eq!(delta.previous_read_offset, 0);
+        assert_eq!(delta.message_count, 1);
+        assert!(delta.transcript.contains("after rewrite"));
+        let _ = fs::remove_file(path);
+    }
+
+    fn test_codex_session(path: &std::path::Path) -> CodexSessionMeta {
+        CodexSessionMeta {
+            id: "codex-session-test".into(),
+            source_kind: "codex".into(),
+            source_label: "Codex".into(),
+            date: "2026-07-09".into(),
+            path: path.to_string_lossy().into_owned(),
+            size_bytes: fs::metadata(path).unwrap().len(),
+            modified_at: 0,
+            cwd: None,
+        }
     }
 }
 
@@ -4362,6 +4588,7 @@ pub fn run() {
             index_conversation_sessions,
             read_selected_codex_sessions,
             read_selected_conversation_sessions,
+            read_conversation_session_deltas,
             cancel_codex_review_job,
             cancel_conversation_review_job,
             show_main_window,

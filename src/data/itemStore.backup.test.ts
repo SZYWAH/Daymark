@@ -13,7 +13,10 @@ import {
   getItems,
   restoreCoreBackup,
   saveAiSettings,
+  saveAutoWorkReviewSettings,
   updateMemoryDocument,
+  upsertAutoWorkReviewCursors,
+  upsertRollingWorkReview,
   validateCoreBackup,
   type DaymarkCoreBackupPayload,
   type DaymarkCoreBackupV1,
@@ -65,6 +68,32 @@ describe("core backup", () => {
       manualApiKey: "sk-secret-key",
       useEnvKey: false,
     });
+    await saveAutoWorkReviewSettings({
+      enabled: true,
+      lastMessage: "Auto review should stay local.",
+    });
+    await upsertRollingWorkReview({
+      date: "2026-07-09",
+      title: "Auto work review",
+      content: "Private rolling work summary should not export.",
+      sourceKinds: ["codex"],
+      processedSessionCount: 1,
+      processedChars: 128,
+      lastRunAt: NOW,
+      status: "ready",
+    });
+    await upsertAutoWorkReviewCursors([
+      {
+        sessionId: "codex-session-secret",
+        path: "C:\\Users\\example\\.codex\\sessions\\secret.jsonl",
+        sourceKind: "codex",
+        date: "2026-07-09",
+        readOffset: 42,
+        modifiedAt: 42,
+        lastProcessedAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
 
     const backup = await exportCoreBackup();
     const serialized = JSON.stringify(backup);
@@ -82,6 +111,9 @@ describe("core backup", () => {
     expect(serialized).not.toContain("manualApiKey");
     expect(serialized).not.toContain("summaryReports");
     expect(serialized).not.toContain("Should not export");
+    expect(serialized).not.toContain("Auto work review");
+    expect(serialized).not.toContain("autoWorkReview");
+    expect(serialized).not.toContain("codex-session-secret");
   });
 
   it("rejects non-Daymark and structurally invalid backups", () => {

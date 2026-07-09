@@ -5,6 +5,8 @@ import type {
   CodexDailyReview,
   CodexReviewInput,
   ConversationReviewInput,
+  ConversationSessionDelta,
+  ConversationSourceKind,
   DailyConversationReview,
   Item,
   JournalEntry,
@@ -70,6 +72,7 @@ type AiRequestOptions = {
 
 const AI_REQUEST_TIMEOUT_MS = 90_000;
 const AI_STREAM_TIMEOUT_MS = 180_000;
+const ROLLING_REVIEW_CHUNK_CHARS = 14_000;
 
 export type AiActionResult = (
   | { action: "summarize"; aiSummary: string }
@@ -84,6 +87,17 @@ export type JournalPeriod = Pick<SummaryReport, "periodType" | "periodStart" | "
 export type JournalSummaryResult = {
   title: string;
   content: string;
+};
+
+export type RollingWorkReviewUpdateInput = {
+  date: string;
+  currentContent: string;
+  sourceKinds: ConversationSourceKind[];
+  deltas: ConversationSessionDelta[];
+  processedSessionCount: number;
+  processedChars: number;
+  redacted: boolean;
+  truncated: boolean;
 };
 
 export type CodexReviewProgressStage =
@@ -414,6 +428,73 @@ export async function streamSummarizeConversationReview(
   const content = stripCodeFence(streamed).trim();
   return {
     title: extractMarkdownTitle(content) || `${input.date} ${formatConversationSource(input)}回顾`,
+    content,
+  };
+}
+
+export async function streamUpdateRollingWorkReview(
+  input: RollingWorkReviewUpdateInput,
+  settings: AiSettings,
+  onProgress: (progress: CodexReviewProgress) => void,
+  signal?: AbortSignal,
+): Promise<JournalSummaryResult> {
+  const deltas = input.deltas.filter((delta) => delta.transcript.trim());
+  if (deltas.length === 0) {
+    throw new Error("没有新的 AI 对话内容可用于更新今日工作内容。");
+  }
+
+  onProgress({
+    stage: "本地脱敏",
+    message: input.redacted ? "新增对话已在本机完成脱敏。" : "新增对话未发现明显敏感内容。",
+  });
+
+  const deltaText = deltas.map(formatRollingWorkDelta).join("\n\n---\n\n");
+  const chunks = chunkPlainText(deltaText, ROLLING_REVIEW_CHUNK_CHARS);
+  const deltaContext: string[] = [];
+
+  if (chunks.length <= 1) {
+    deltaContext.push(deltaText);
+  } else {
+    for (const [index, chunk] of chunks.entries()) {
+      onProgress({
+        stage: "分块整理",
+        message: `正在整理新增片段 ${index + 1}/${chunks.length}。`,
+      });
+      const summary = await callDeepSeek(
+        settings,
+        [
+          {
+            role: "system",
+            content:
+              "你是个人工作日志的增量整理助手。请把新增 AI 对话片段压缩成中文要点，保留已完成事项、正在进行、关键决策、问题风险、待办和可沉淀为长期记忆的候选。不要记录密钥、token、临时路径或原始命令输出。",
+          },
+          {
+            role: "user",
+            content: `日期：${input.date}\n片段：${index + 1}/${chunks.length}\n\n${chunk}`,
+          },
+        ],
+        { maxTokens: 1000, signal },
+      );
+      deltaContext.push(summary.trim());
+    }
+  }
+
+  onProgress({ stage: "合成每日回顾", message: "正在把新增内容合并进今日工作内容。" });
+  const streamed = await callDeepSeekStream(
+    settings,
+    buildRollingWorkReviewMessages(input, deltaContext),
+    (_token, fullText) => {
+      onProgress({
+        stage: "合成每日回顾",
+        message: "今日工作内容正在更新。",
+        partialContent: fullText,
+      });
+    },
+    { maxTokens: 2600, signal },
+  );
+  const content = stripCodeFence(streamed).trim();
+  return {
+    title: extractMarkdownTitle(content) || `${input.date} 今日工作内容`,
     content,
   };
 }
@@ -753,6 +834,49 @@ function buildConversationReviewSynthesisMessages(input: ConversationReviewInput
   ];
 }
 
+function buildRollingWorkReviewMessages(input: RollingWorkReviewUpdateInput, deltaContext: string[]): ChatMessage[] {
+  const current = input.currentContent.trim() || "今天还没有形成工作内容。";
+  return [
+    {
+      role: "system",
+      content:
+        "你正在维护一份当天工作内容记录。请基于“当前版本”和“新增对话片段”更新同一份 Markdown 文档，不要另起一份总结。保留已准确内容，合并重复事项，删除明显过时的进行中状态，不编造新增对话里没有的信息。固定使用这些二级标题：已完成、正在进行、关键决策、问题与风险、待办、可沉淀为长期记忆的候选。不要记录密钥、token、临时路径或原始命令输出。",
+    },
+    {
+      role: "user",
+      content: [
+        `日期：${input.date}`,
+        `来源：${formatSourceKindList(input.sourceKinds)}`,
+        `累计处理会话：${input.processedSessionCount}`,
+        `累计处理字符：${input.processedChars}`,
+        `新增内容已脱敏：${input.redacted ? "是" : "否"}`,
+        `新增内容已截断：${input.truncated ? "是" : "否"}`,
+        "",
+        "当前版本：",
+        current,
+        "",
+        "新增对话片段或片段摘要：",
+        deltaContext.map((summary, index) => `【新增 ${index + 1}】\n${summary}`).join("\n\n---\n\n"),
+        "",
+        "请只输出更新后的完整 Markdown 正文。",
+      ].join("\n"),
+    },
+  ];
+}
+
+function formatRollingWorkDelta(delta: ConversationSessionDelta) {
+  return [
+    `来源：${delta.sourceLabel}`,
+    `日期：${delta.date}`,
+    `会话：${delta.sessionId}`,
+    `新增消息：${delta.messageCount}`,
+    `已脱敏：${delta.redacted ? "是" : "否"}`,
+    `已截断：${delta.truncated ? "是" : "否"}`,
+    "",
+    delta.transcript,
+  ].join("\n");
+}
+
 function buildConversationReviewJsonMessages(input: ConversationReviewInput, chunkSummaries: string[]): ChatMessage[] {
   return [
     {
@@ -903,6 +1027,21 @@ function formatConversationSource(input: Pick<ConversationReviewInput, "reviewKi
   if (input.sourceKinds.includes("claude") && input.sourceKinds.includes("codex")) return "AI 对话";
   if (input.sourceKinds.includes("claude")) return "Claude Code";
   return "Codex";
+}
+
+function formatSourceKindList(sourceKinds: ConversationSourceKind[]) {
+  if (sourceKinds.includes("claude") && sourceKinds.includes("codex")) return "Codex、Claude Code";
+  if (sourceKinds.includes("claude")) return "Claude Code";
+  return "Codex";
+}
+
+function chunkPlainText(value: string, chunkSize: number) {
+  const chars = Array.from(value);
+  const chunks: string[] = [];
+  for (let index = 0; index < chars.length; index += chunkSize) {
+    chunks.push(chars.slice(index, index + chunkSize).join(""));
+  }
+  return chunks.length > 0 ? chunks : [""];
 }
 
 function getFileNameFromPath(path?: string) {

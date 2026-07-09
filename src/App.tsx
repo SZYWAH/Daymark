@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { animate } from "animejs";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -40,6 +40,7 @@ import {
   deleteItem,
   deleteJournalEntry,
   deleteKnowledgeLink,
+  getAutoWorkReviewSettings,
   applyDailyReviewReplacementDraft,
   applyMemoryPatchDraft,
   formatTimestamp,
@@ -55,11 +56,13 @@ import {
   getMemoryCards,
   getMemoryDocument,
   getMemoryPatchDrafts,
+  getRollingWorkReviewByDate,
   getSummaryReports,
   getTodayDashboardData,
   markItemOpened,
   replaceConversationSessionIndex,
   restoreCoreBackup,
+  saveAutoWorkReviewSettings,
   type DaymarkCoreBackupCounts,
   type DaymarkCoreBackupV1,
   updateCodexDailyReview,
@@ -75,6 +78,7 @@ import {
   upsertSummaryReport,
 } from "./data/itemStore";
 import { loadAiSettingsWithSecrets, saveAiSettingsWithSecrets } from "./lib/aiSecrets";
+import { runAutoWorkReviewOnce } from "./lib/autoWorkReview";
 import { flattenFolderOptions, getFolderAndDescendantIds } from "./lib/folders";
 import { applyThemeMode, bindSystemThemeListener } from "./lib/theme";
 import { getSafeErrorMessage } from "./lib/redaction";
@@ -93,6 +97,7 @@ import type {
   AiRunReceipt,
   AiSettings,
   AiActionContext,
+  AutoWorkReviewSettings,
   CodexDailyReview,
   CodexReviewInput,
   CodexSessionIndex,
@@ -114,6 +119,7 @@ import type {
   ProcessStatus,
   ReadingStatus,
   ResizableLayoutState,
+  RollingWorkReview,
   SearchResult,
   SmartView,
   SummaryReport,
@@ -534,6 +540,10 @@ export default function App() {
   const [links, setLinks] = useState<KnowledgeLink[]>([]);
   const [todayDashboard, setTodayDashboard] = useState<TodayDashboardData | null>(null);
   const [settings, setSettings] = useState<AiSettings | null>(null);
+  const [autoWorkReviewSettings, setAutoWorkReviewSettings] = useState<AutoWorkReviewSettings | null>(null);
+  const [rollingWorkReview, setRollingWorkReview] = useState<RollingWorkReview | null>(null);
+  const [autoWorkReviewRunning, setAutoWorkReviewRunning] = useState(false);
+  const [autoWorkReviewProgress, setAutoWorkReviewProgress] = useState<CodexReviewProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<ActiveView>({ kind: "today" });
   const [lastListView, setLastListView] = useState<ListView>({ kind: "smart", id: "attention" });
@@ -577,8 +587,19 @@ export default function App() {
   const extractAbortRef = useRef<AbortController | null>(null);
   const aiActionAbortRef = useRef<AbortController | null>(null);
   const reviewGenerationRunningRef = useRef(new Set<string>());
+  const autoWorkReviewRunningRef = useRef(false);
+  const settingsRef = useRef<AiSettings | null>(null);
+  const autoWorkReviewSettingsRef = useRef<AutoWorkReviewSettings | null>(null);
 
   const aiConfigured = Boolean(settings && getEffectiveAiSettings(settings).keySource !== "missing");
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    autoWorkReviewSettingsRef.current = autoWorkReviewSettings;
+  }, [autoWorkReviewSettings]);
 
   const nextTodayDashboardSeq = () => {
     todayDashboardSeqRef.current += 1;
@@ -626,10 +647,13 @@ export default function App() {
         await seedDemoDataInDevIfEnabled();
         const dashboardSeq = nextTodayDashboardSeq();
         const memorySharedSeq = nextMemorySharedSeq();
+        const todayKey = toDateKey(new Date());
         const [
           loadedItems,
           loadedFolders,
           loadedSettingsResult,
+          loadedAutoWorkReviewSettings,
+          loadedRollingWorkReview,
           loadedJournal,
           loadedReports,
           loadedMemories,
@@ -646,6 +670,8 @@ export default function App() {
             getItems(),
             getFolders(),
             loadAiSettingsWithSecrets(),
+            getAutoWorkReviewSettings(),
+            getRollingWorkReviewByDate(todayKey),
             getJournalEntries(),
             getSummaryReports(),
             getMemoryCards(),
@@ -663,6 +689,8 @@ export default function App() {
         setItems(loadedItems);
         setFolders(loadedFolders);
         setSettings(loadedSettingsResult.settings);
+        setAutoWorkReviewSettings(loadedAutoWorkReviewSettings);
+        setRollingWorkReview(loadedRollingWorkReview ?? null);
         applyThemeMode(loadedSettingsResult.settings.themeMode);
         if (loadedSettingsResult.notice) setError(loadedSettingsResult.notice);
         setJournalEntries(loadedJournal);
@@ -961,6 +989,74 @@ export default function App() {
     setLinks(await getKnowledgeLinks());
     setSearchRefreshKey((key) => key + 1);
   };
+
+  const refreshAutoWorkReviewData = async () => {
+    const todayKey = toDateKey(new Date());
+    const [loadedAutoSettings, loadedRollingReview] = await Promise.all([
+      getAutoWorkReviewSettings(),
+      getRollingWorkReviewByDate(todayKey),
+    ]);
+    setAutoWorkReviewSettings(loadedAutoSettings);
+    setRollingWorkReview(loadedRollingReview ?? null);
+  };
+
+  const handleSaveAutoWorkReviewSettings = async (patch: Partial<AutoWorkReviewSettings>) => {
+    const saved = await saveAutoWorkReviewSettings(patch);
+    setAutoWorkReviewSettings(saved);
+    if (!saved.enabled) {
+      setAutoWorkReviewProgress(null);
+    }
+    return saved;
+  };
+
+  const handleRunAutoWorkReview = useCallback(async () => {
+    const currentAutoSettings = autoWorkReviewSettingsRef.current;
+    if (!currentAutoSettings || autoWorkReviewRunningRef.current) return;
+    autoWorkReviewRunningRef.current = true;
+    setAutoWorkReviewRunning(true);
+    setAutoWorkReviewProgress(null);
+    try {
+      const result = await runAutoWorkReviewOnce({
+        settings: settingsRef.current,
+        autoSettings: currentAutoSettings,
+        onProgress: setAutoWorkReviewProgress,
+      });
+      await refreshAutoWorkReviewData();
+      if (result.review) {
+        setRollingWorkReview(result.review);
+      }
+      if (result.status === "error") {
+        setError(result.message);
+      }
+      return result;
+    } finally {
+      autoWorkReviewRunningRef.current = false;
+      setAutoWorkReviewRunning(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (loading || !settings || !autoWorkReviewSettings?.enabled || !isDesktopRuntime()) return undefined;
+    let disposed = false;
+    const runIfActive = () => {
+      if (disposed || autoWorkReviewRunningRef.current) return;
+      void handleRunAutoWorkReview();
+    };
+    const firstRunTimer = window.setTimeout(runIfActive, 60_000);
+    const intervalTimer = window.setInterval(runIfActive, autoWorkReviewSettings.intervalMinutes * 60_000);
+    return () => {
+      disposed = true;
+      window.clearTimeout(firstRunTimer);
+      window.clearInterval(intervalTimer);
+    };
+  }, [
+    autoWorkReviewSettings?.enabled,
+    autoWorkReviewSettings?.intervalMinutes,
+    autoWorkReviewSettings?.sourceKinds.join("|"),
+    handleRunAutoWorkReview,
+    loading,
+    settings,
+  ]);
 
   const refreshCoreBackupData = async () => {
     const dashboardSeq = nextTodayDashboardSeq();
@@ -2274,6 +2370,10 @@ export default function App() {
               data={todayDashboard}
               loading={loading}
               settings={settings}
+              autoWorkReviewSettings={autoWorkReviewSettings}
+              rollingWorkReview={rollingWorkReview}
+              autoWorkReviewRunning={autoWorkReviewRunning}
+              autoWorkReviewProgress={autoWorkReviewProgress}
               codexReviews={codexReviews}
               memoryPatchDrafts={memoryPatchDrafts}
               conversationGenerationDrafts={conversationGenerationDrafts}
@@ -2283,6 +2383,7 @@ export default function App() {
               onOpenLibraryView={(view) => handleSelectView({ kind: "smart", id: view })}
               onOpenJournalPage={() => handleSelectView({ kind: "journal" })}
               onOpenMemoryPage={(subView?: MemorySubView) => handleSelectView({ kind: "memory", subView })}
+              onRunAutoWorkReview={handleRunAutoWorkReview}
               onReplaceCodexSessionIndex={handleReplaceCodexSessionIndex}
               onGenerateCodexReview={handleGenerateCodexReview}
               onGenerateCombinedReview={handleGenerateCombinedReview}
@@ -2347,7 +2448,11 @@ export default function App() {
             settings ? (
               <SettingsPanel
                 settings={settings}
+                autoWorkReviewSettings={autoWorkReviewSettings}
+                autoWorkReviewRunning={autoWorkReviewRunning}
                 onSave={handleSaveSettings}
+                onSaveAutoWorkReviewSettings={handleSaveAutoWorkReviewSettings}
+                onRunAutoWorkReview={handleRunAutoWorkReview}
                 onDirtyChange={setSettingsDirty}
                 onRestoreCoreBackup={handleRestoreCoreBackup}
               />
