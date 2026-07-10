@@ -11,11 +11,14 @@ import {
   FolderKanban,
   FolderOpen,
   Globe2,
+  Heading1,
   Image,
   Link2,
+  ListChecks,
   PanelLeft,
   Sparkles,
   Star,
+  Tags,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
@@ -85,11 +88,11 @@ const typeMeta: Record<ItemType, { label: string; icon: LucideIcon; color: strin
 const processLabels = ["收件箱", "待整理", "已整理", "已归档", "废弃"];
 const readingLabels = ["不需要", "待阅读", "阅读中", "已阅读", "需复习"];
 
-const aiActions: Array<{ id: AiAction; label: string; description: string }> = [
-  { id: "summarize", label: "总结", description: "提炼正文和文件内容" },
-  { id: "title", label: "标题", description: "生成更清晰的标题" },
-  { id: "tags", label: "标签", description: "补充可检索标签" },
-  { id: "todos", label: "待办", description: "提取后续动作" },
+const aiActions: Array<{ id: AiAction; label: string; description: string; icon: LucideIcon }> = [
+  { id: "summarize", label: "总结", description: "提炼正文和文件内容", icon: FileText },
+  { id: "title", label: "标题", description: "生成更清晰的标题", icon: Heading1 },
+  { id: "tags", label: "标签", description: "补充可检索标签", icon: Tags },
+  { id: "todos", label: "待办", description: "提取后续动作", icon: ListChecks },
 ];
 
 export function ItemReader({
@@ -508,23 +511,28 @@ function ReaderWorkbench({
             {aiToolsOpen && (
               <div className="mt-2 rounded-[8px] border border-line/60 bg-surface/45 p-2">
                 <div className="grid min-w-0 gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
-                  {aiActions.map((action) => (
-                    <button
-                      key={action.id}
-                      className="ghost-action flex h-8 items-center justify-start px-2.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={Boolean(aiRunningAction)}
-                      onClick={() => {
-                        onRunAiAction(action.id);
-                        setPanelOpen(false);
-                        setAiToolsOpen(false);
-                      }}
-                    >
-                      <span className="min-w-0">
-                        <span className="block leading-5">{aiRunningAction === action.id ? "处理中" : action.label}</span>
-                        <span className="sr-only">{action.description}</span>
-                      </span>
-                    </button>
-                  ))}
+                  {aiActions.map((action) => {
+                    const ActionIcon = action.icon;
+                    return (
+                      <button
+                        key={action.id}
+                        className="reader-ai-action-button flex h-8 items-center justify-start gap-1.5 px-2.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={Boolean(aiRunningAction)}
+                        title={action.description}
+                        onClick={() => {
+                          onRunAiAction(action.id);
+                          setPanelOpen(false);
+                          setAiToolsOpen(false);
+                        }}
+                      >
+                        <ActionIcon size={14} className="shrink-0" />
+                        <span className="min-w-0">
+                          <span className="block leading-5">{aiRunningAction === action.id ? "处理中" : action.label}</span>
+                          <span className="sr-only">{action.description}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
                 <p className="mt-2 text-xs leading-5 text-ink/42">手动触发；读取与发送范围会在结果中回执。</p>
               </div>

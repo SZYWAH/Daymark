@@ -296,6 +296,10 @@ button {
     @apply rounded-[8px] border border-transparent bg-transparent px-3 text-sm text-ink/50 transition hover:border-line hover:bg-surface/60 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
   }
 
+  .reader-ai-action-button {
+    @apply rounded-[8px] border border-line/70 bg-surface/45 font-medium text-ink/65 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition hover:border-copper/35 hover:bg-panel/70 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
   @media (pointer: coarse) {
     .journal-entry-actions {
       display: flex;
@@ -307,6 +311,7 @@ button {
   .secondary-action:focus-visible,
   .soft-button:focus-visible,
   .ghost-action:focus-visible,
+  .reader-ai-action-button:focus-visible,
   .danger-action:focus-visible,
   .danger-icon-action:focus-visible,
   .quick-capture-primary:focus-visible,
