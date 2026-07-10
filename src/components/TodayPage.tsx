@@ -54,6 +54,7 @@ type GenerateReviewResult = {
 type TodayPageProps = {
   data: TodayDashboardData | null;
   loading: boolean;
+  focusComposerRequest: number;
   settings: AiSettings | null;
   autoWorkReviewSettings: AutoWorkReviewSettings | null;
   rollingWorkReview: RollingWorkReview | null;
@@ -116,6 +117,7 @@ const sourceLabels: Record<ConversationSourceKind, string> = {
 export function TodayPage({
   data,
   loading,
+  focusComposerRequest,
   settings,
   autoWorkReviewSettings,
   rollingWorkReview,
@@ -223,7 +225,13 @@ export function TodayPage({
     >
       <div className="flex h-full min-h-0 overflow-y-auto px-5 pb-20 pt-10 scrollbar-thin sm:pb-10 lg:pt-[clamp(9.25rem,21vh,15rem)]">
         <div className="mx-auto flex min-h-full w-full max-w-[660px] flex-col justify-start">
-          <TodayComposer value={content} saving={saving} onChange={setContent} onSubmit={submit} />
+          <TodayComposer
+            value={content}
+            saving={saving}
+            focusRequest={focusComposerRequest}
+            onChange={setContent}
+            onSubmit={submit}
+          />
           {composerMessage && (
             <p
               className={`mt-3 text-center text-xs ${
@@ -406,16 +414,40 @@ function TodayInlineShortcuts({
 function TodayComposer({
   value,
   saving,
+  focusRequest,
   onChange,
   onSubmit,
 }: {
   value: string;
   saving: boolean;
+  focusRequest: number;
   onChange: (value: string) => void;
   onSubmit: () => Promise<boolean> | boolean;
 }) {
   const [focused, setFocused] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (focusRequest <= 0) return undefined;
+
+    const focusComposer = () => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const activeElement = document.activeElement;
+      if (activeElement && activeElement !== document.body && activeElement !== textarea) return;
+      textarea.focus({ preventScroll: true });
+      const cursorPosition = textarea.value.length;
+      textarea.setSelectionRange(cursorPosition, cursorPosition);
+    };
+    const initialFocusTimer = window.setTimeout(focusComposer, 80);
+    const settledFocusTimer = window.setTimeout(focusComposer, 420);
+
+    return () => {
+      window.clearTimeout(initialFocusTimer);
+      window.clearTimeout(settledFocusTimer);
+    };
+  }, [focusRequest]);
 
   const submitAndClose = async () => {
     await Promise.resolve(onSubmit()).then((saved) => {
@@ -429,6 +461,7 @@ function TodayComposer({
         此刻记录
       </label>
       <textarea
+        ref={textareaRef}
         id="today-composer"
         value={value}
         onChange={(event) => onChange(event.target.value)}

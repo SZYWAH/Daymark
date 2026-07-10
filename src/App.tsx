@@ -16,6 +16,7 @@ import {
 } from "./ai/deepseek";
 import { EditorOverlay } from "./components/EditorOverlay";
 import { ExtractDialog, type ExtractDraft } from "./components/ExtractDialog";
+import { FirstRunGuide, type OnboardingStartAction } from "./components/FirstRunGuide";
 import { ImportDialog, type ImportDraft, type ImportMode } from "./components/ImportDialog";
 import { ConfirmDialog, PromptDialog } from "./components/ConfirmDialog";
 import { ItemList } from "./components/ItemList";
@@ -84,6 +85,7 @@ import { runAutoWorkReviewOnce } from "./lib/autoWorkReview";
 import { flattenFolderOptions, getFolderAndDescendantIds } from "./lib/folders";
 import { applyThemeMode, bindSystemThemeListener } from "./lib/theme";
 import { getSafeErrorMessage } from "./lib/redaction";
+import { markOnboardingCompleted, shouldShowOnboarding } from "./lib/onboarding";
 import { ATTENTION_READING_STATUSES, getAttentionPriority, isAttentionItem } from "./lib/libraryViews";
 import {
   extractLocalFileText,
@@ -573,6 +575,9 @@ export default function App() {
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const [folderPrompt, setFolderPrompt] = useState<FolderPromptState | null>(null);
+  const [firstRunGuideOpen, setFirstRunGuideOpen] = useState(false);
+  const [firstRunGuideAutoPending, setFirstRunGuideAutoPending] = useState(() => shouldShowOnboarding());
+  const [todayComposerFocusRequest, setTodayComposerFocusRequest] = useState(0);
   const [layout, setLayout] = useState<ResizableLayoutState>(() => loadLayoutState());
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const quickCaptureNoticeTimerRef = useRef<number | undefined>(undefined);
@@ -596,6 +601,12 @@ export default function App() {
 
   const aiConfigured = Boolean(settings && getEffectiveAiSettings(settings).keySource !== "missing");
 
+  const closeFirstRunGuide = useCallback(() => {
+    markOnboardingCompleted();
+    setFirstRunGuideAutoPending(false);
+    setFirstRunGuideOpen(false);
+  }, []);
+
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
@@ -603,6 +614,12 @@ export default function App() {
   useEffect(() => {
     autoWorkReviewSettingsRef.current = autoWorkReviewSettings;
   }, [autoWorkReviewSettings]);
+
+  useEffect(() => {
+    if (loading || !firstRunGuideAutoPending) return;
+    setFirstRunGuideAutoPending(false);
+    setFirstRunGuideOpen(true);
+  }, [firstRunGuideAutoPending, loading]);
 
   const nextTodayDashboardSeq = () => {
     todayDashboardSeqRef.current += 1;
@@ -1169,7 +1186,7 @@ export default function App() {
   };
 
   const handleSelectView = (view: ActiveView) => {
-    if (blockUnsavedWorkNavigation(view)) return;
+    if (blockUnsavedWorkNavigation(view)) return false;
     if (view.kind === "memory" && !view.subView) {
       setActiveView({ kind: "memory", subView: "document" });
     } else {
@@ -1184,6 +1201,29 @@ export default function App() {
     setIsEditing(false);
     setDraft(null);
     setAiRunState(null);
+    return true;
+  };
+
+  const handleOnboardingStart = (action: OnboardingStartAction) => {
+    closeFirstRunGuide();
+
+    if (action === "record") {
+      const navigated = handleSelectView({ kind: "today" });
+      if (navigated) {
+        setTodayComposerFocusRequest((current) => current + 1);
+      }
+      return navigated;
+    }
+
+    if (action === "import") {
+      const navigated = handleSelectView({ kind: "smart", id: "attention" });
+      if (navigated) {
+        setImportOpen(true);
+      }
+      return navigated;
+    }
+
+    return handleSelectView({ kind: "memory", subView: "ai-review" });
   };
 
   const handleSelectItem = async (item: Item) => {
@@ -2388,6 +2428,7 @@ export default function App() {
             <TodayPage
               data={todayDashboard}
               loading={loading}
+              focusComposerRequest={todayComposerFocusRequest}
               settings={settings}
               autoWorkReviewSettings={autoWorkReviewSettings}
               rollingWorkReview={rollingWorkReview}
@@ -2478,6 +2519,7 @@ export default function App() {
                 onRunAutoWorkReview={handleRunAutoWorkReview}
                 onDirtyChange={setSettingsDirty}
                 onRestoreCoreBackup={handleRestoreCoreBackup}
+                onOpenOnboarding={() => setFirstRunGuideOpen(true)}
               />
             ) : (
               <section className="workspace-surface">
@@ -2681,6 +2723,11 @@ export default function App() {
         }}
         open={Boolean(pendingConfirm)}
         title={pendingConfirm?.title ?? ""}
+      />
+      <FirstRunGuide
+        open={firstRunGuideOpen}
+        onStart={handleOnboardingStart}
+        onDismiss={closeFirstRunGuide}
       />
       {quickCaptureNotice && (
         <div className="pointer-events-none fixed bottom-5 right-5 z-[80] max-w-sm rounded-[14px] border border-line/70 bg-paper/92 px-4 py-3 text-sm text-ink shadow-[0_18px_48px_rgba(0,0,0,0.22)] backdrop-blur-xl">

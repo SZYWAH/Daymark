@@ -1,6 +1,7 @@
 import {
   Bot,
   CheckCircle2,
+  CircleHelp,
   Database,
   Download,
   Moon,
@@ -47,6 +48,7 @@ type SettingsPanelProps = {
   onRunAutoWorkReview: () => Promise<unknown>;
   onDirtyChange?: (dirty: boolean) => void;
   onRestoreCoreBackup: (backup: DaymarkCoreBackupV1) => Promise<DaymarkCoreBackupCounts | null>;
+  onOpenOnboarding: () => void;
 };
 
 function normalizeSettingsForDirty(settings: AiSettings) {
@@ -80,6 +82,7 @@ export function SettingsPanel({
   onRunAutoWorkReview,
   onDirtyChange,
   onRestoreCoreBackup,
+  onOpenOnboarding,
 }: SettingsPanelProps) {
   const [draft, setDraft] = useState(settings);
   const [saving, setSaving] = useState(false);
@@ -714,6 +717,7 @@ export function SettingsPanel({
         </div>
           </div>
           <aside className="space-y-5 pr-1 xl:min-h-0 xl:overflow-y-auto xl:scrollbar-thin">
+            <UsageHelp onOpenOnboarding={onOpenOnboarding} />
             <BuildInfo />
             <CodexProbePanel />
           </aside>
@@ -750,6 +754,22 @@ function downloadTextFile(fileName: string, contents: string) {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function UsageHelp({ onOpenOnboarding }: { onOpenOnboarding: () => void }) {
+  return (
+    <section className="section-surface space-y-3 p-5">
+      <div>
+        <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Help</p>
+        <h3 className="mt-1 text-base font-semibold text-ink">使用帮助</h3>
+        <p className="mt-1 text-sm leading-6 text-ink/52">需要时，可以重新查看 Daymark 的用途和基本工作流。</p>
+      </div>
+      <button className="secondary-action action-standard text-xs" onClick={onOpenOnboarding}>
+        <CircleHelp size={15} />
+        重新查看使用引导
+      </button>
+    </section>
+  );
 }
 
 function BuildInfo() {
