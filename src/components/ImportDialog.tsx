@@ -292,7 +292,7 @@ export function ImportDialog({
             <p className="truncate text-sm text-ink/52">资料库保存长期资料与知识卡片；日常流水请写到日志。</p>
           </div>
           <button
-            className="soft-button flex h-9 w-9 items-center justify-center"
+            className="soft-button icon-action-standard"
             disabled={saving}
             onClick={() => close()}
             aria-label="关闭导入资料"
@@ -339,7 +339,7 @@ export function ImportDialog({
                 <p className="text-xs text-ink/52">确认标题、类型、目录、标签和阅读状态后再写入资料库。</p>
               </div>
               <button
-                className="soft-button h-9 px-3 text-sm"
+                className="soft-button action-standard"
                 disabled={saving}
                 onClick={discardBatchDrafts}
               >
@@ -353,7 +353,7 @@ export function ImportDialog({
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-ink/42">#{index + 1}</span>
                     <button
-                      className="danger-icon-action h-8 w-8"
+                      className="danger-icon-action icon-action-compact"
                       onClick={() => removeDraft(draft.id)}
                       title="移除"
                       aria-label="移除这条导入草稿"
@@ -367,7 +367,7 @@ export function ImportDialog({
                       <input
                         value={draft.title}
                         onChange={(event) => updateDraft(draft.id, { title: event.target.value })}
-                        className="field-control mt-1 h-10 w-full px-3 text-sm"
+                        className="field-control field-prominent mt-1 w-full"
                       />
                     </label>
                     <label className="block text-xs font-medium text-ink/58">
@@ -399,7 +399,7 @@ export function ImportDialog({
                       <input
                         value={draft.tags.join("，")}
                         onChange={(event) => updateDraft(draft.id, { tags: parseTags(event.target.value) })}
-                        className="field-control mt-1 h-10 w-full px-3 text-sm"
+                        className="field-control field-prominent mt-1 w-full"
                       />
                     </label>
                     <label className="block text-xs font-medium text-ink/58">
@@ -429,7 +429,7 @@ export function ImportDialog({
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
                 placeholder={mode === "card" ? "知识卡片标题，可留空，按正文生成本地标题" : "可留空，使用网址或文件名"}
-                className="field-control mt-1 h-10 w-full px-3 text-sm"
+                className="field-control field-prominent mt-1 w-full"
               />
             </label>
 
@@ -440,7 +440,7 @@ export function ImportDialog({
                   value={sourceUrl}
                   onChange={(event) => setSourceUrl(event.target.value)}
                   placeholder="https://example.com"
-                  className="field-control mt-1 h-10 w-full px-3 text-sm"
+                  className="field-control field-prominent mt-1 w-full"
                 />
               </label>
             )}
@@ -453,12 +453,12 @@ export function ImportDialog({
                     value={filePath}
                     onChange={(event) => setFilePath(event.target.value)}
                     placeholder={mode === "folder" ? "D:\\资料库\\projects\\example" : "D:\\资料库\\documents\\example.pdf"}
-                    className="field-control h-10 min-w-0 flex-1 px-3 text-sm"
+                    className="field-control field-prominent min-w-0 flex-1"
                   />
                   {desktop && (
                     <button
                       type="button"
-                      className="soft-button h-10 shrink-0 px-3 text-sm"
+                      className="soft-button action-prominent shrink-0"
                       onClick={mode === "folder" ? handlePickFolder : handlePickSingleFile}
                     >
                       {mode === "folder" ? "选择文件夹" : "选择文件"}
@@ -474,7 +474,7 @@ export function ImportDialog({
                 value={tagText}
                 onChange={(event) => setTagText(event.target.value)}
                 placeholder="用逗号分隔"
-                className="field-control mt-1 h-10 w-full px-3 text-sm"
+                className="field-control field-prominent mt-1 w-full"
               />
             </label>
 
@@ -499,7 +499,7 @@ export function ImportDialog({
             {desktop && mode === "file" && (
               <button
                 type="button"
-                className="soft-button flex h-10 items-center gap-2 px-4 text-sm"
+                className="soft-button action-prominent"
                 onClick={handlePickFiles}
               >
                 <Plus size={16} />
@@ -511,13 +511,13 @@ export function ImportDialog({
 
         <div className="mt-5 flex shrink-0 justify-end gap-2">
           <button
-            className="soft-button h-10 px-4 text-sm"
+            className="soft-button action-prominent"
             onClick={() => close()}
           >
             取消
           </button>
           <button
-            className="primary-button flex h-10 items-center gap-2"
+            className="primary-button action-prominent"
             disabled={saving || (batchMode && batchDrafts.length === 0)}
             onClick={submit}
           >

@@ -95,18 +95,18 @@ export function ConversationSessionPreviewOverlay({
             { value: "claude", label: "Claude Code" },
           ]}
           onChange={(value) => setSourceFilter(value as "all" | ConversationSourceKind)}
-          triggerClassName="h-9 px-2 text-xs shadow-none"
+          triggerClassName="field-standard px-2 text-xs shadow-none"
         />
         <input
           value={dateQuery}
           onChange={(event) => setDateQuery(event.target.value)}
-          className="field-control h-9 px-2 text-xs"
+          className="field-control field-standard px-2 text-xs"
           placeholder="日期，如 2026-07"
         />
         <input
           value={keyword}
           onChange={(event) => setKeyword(event.target.value)}
-          className="field-control h-9 px-2 text-xs"
+          className="field-control field-standard px-2 text-xs"
           placeholder="搜索标题、路径、预览"
         />
       </div>
@@ -126,20 +126,20 @@ export function ConversationSessionPreviewOverlay({
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h4 className="truncate text-anywhere text-sm font-semibold text-ink">{session.title}</h4>
-                      <span className="quiet-chip py-0.5 text-[11px] text-ink/45">{session.sourceLabel}</span>
+                      <span className="quiet-chip py-0.5 text-[11px] text-ink/50">{session.sourceLabel}</span>
                     </div>
-                    <p className="mt-1 truncate text-anywhere text-xs text-ink/45">{session.path}</p>
+                    <p className="ui-text-meta mt-1 truncate text-anywhere text-xs">{session.path}</p>
                   </div>
-                  <span className="shrink-0 text-[11px] text-ink/42">{session.date}</span>
+                  <span className="ui-text-meta shrink-0 text-[11px]">{session.date}</span>
                 </div>
                 <BoundedPreview maxLinesClass="line-clamp-2" className="text-xs leading-5 text-ink/54">
                   {session.preview}
                 </BoundedPreview>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <button className="soft-button h-7 px-2 text-[11px]" onClick={() => onToggleSession(session.id)}>
+                  <button className="soft-button action-micro" onClick={() => onToggleSession(session.id)}>
                     {selected ? "取消勾选" : "勾选"}
                   </button>
-                  <button className="soft-button h-7 px-2 text-[11px]" disabled={previewingId === session.id} onClick={() => void openPreview(session)}>
+                  <button className="soft-button action-micro" disabled={previewingId === session.id} onClick={() => void openPreview(session)}>
                     {previewingId === session.id ? "读取中" : "只读预览"}
                   </button>
                 </div>
@@ -147,7 +147,7 @@ export function ConversationSessionPreviewOverlay({
             );
           })}
           {filtered.length === 0 && (
-            <div className="p-5 text-center text-sm text-ink/45">没有符合筛选条件的会话。</div>
+            <div className="ui-text-meta p-5 text-center text-sm">没有符合筛选条件的会话。</div>
           )}
         </ScrollableResultPanel>
 
@@ -157,7 +157,7 @@ export function ConversationSessionPreviewOverlay({
           status={previewMeta || "选择左侧会话后显示。"}
           actions={
             previewText ? (
-              <button className="soft-button h-8 px-2.5 text-xs" onClick={() => void copyPreviewText()}>
+              <button className="soft-button action-compact" onClick={() => void copyPreviewText()}>
                 复制
               </button>
             ) : undefined

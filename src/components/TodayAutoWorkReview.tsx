@@ -50,12 +50,12 @@ export function AutoWorkReviewStatusRow({
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
           {content && (
-            <button className="soft-button h-8 px-2.5 text-xs" onClick={onOpen}>
+            <button className="soft-button action-compact" onClick={onOpen}>
               查看
             </button>
           )}
           <button
-            className="soft-button flex h-8 items-center gap-1.5 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+            className="soft-button action-compact disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!enabled || running}
             onClick={() => void onRun()}
           >
@@ -63,7 +63,7 @@ export function AutoWorkReviewStatusRow({
             {running ? "更新中" : "立即更新"}
           </button>
           {!enabled && (
-            <button className="soft-button h-8 px-2.5 text-xs" onClick={onOpenSettings}>
+            <button className="soft-button action-compact" onClick={onOpenSettings}>
               去设置
             </button>
           )}
@@ -133,7 +133,7 @@ export function RollingWorkReviewReaderOverlay({
               {` · ${review.processedSessionCount} 次会话增量 · ${review.processedChars.toLocaleString("zh-CN")} 字符`}
             </p>
           </div>
-          <button className="soft-button flex h-8 w-8 shrink-0 items-center justify-center" onClick={onClose} title="关闭" aria-label="关闭">
+          <button className="soft-button icon-action-compact" onClick={onClose} title="关闭" aria-label="关闭">
             <X size={15} />
           </button>
         </header>
@@ -150,7 +150,7 @@ export function RollingWorkReviewReaderOverlay({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
-              className="soft-button flex h-8 items-center gap-1.5 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+              className="soft-button action-compact disabled:cursor-not-allowed disabled:opacity-50"
               disabled={running}
               onClick={() => void onRun()}
             >
@@ -158,7 +158,7 @@ export function RollingWorkReviewReaderOverlay({
               {running ? "更新中" : "立即更新"}
             </button>
             <button
-              className="primary-action flex h-8 items-center gap-1.5 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+              className="primary-action action-compact disabled:cursor-not-allowed disabled:opacity-60"
               disabled={archived || archiving}
               onClick={() => void archive()}
             >

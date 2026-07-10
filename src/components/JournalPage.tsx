@@ -647,7 +647,7 @@ function JournalTopActions({
       {reviewPrompts.slice(0, 2).map((prompt) => (
         <button
           key={prompt.id}
-          className="secondary-action flex h-8 items-center gap-1.5 px-3 text-xs"
+          className="secondary-action action-compact"
           disabled={Boolean(summaryRunning)}
           title={prompt.label}
           onClick={() => void onGenerateSummary(prompt)}
@@ -656,15 +656,15 @@ function JournalTopActions({
           {summaryRunning === prompt.id ? "回顾中" : `写${getSummaryPromptShortLabel(prompt.periodType)}`}
         </button>
       ))}
-      <button className={`soft-button flex h-8 items-center gap-1.5 px-2.5 text-xs ${searchOpen ? "active-toggle" : ""}`} onClick={onToggleSearch}>
+      <button className={`soft-button action-compact ${searchOpen ? "active-toggle" : ""}`} onClick={onToggleSearch}>
         <Search size={14} />
         搜索
       </button>
-      <button className={`soft-button flex h-8 items-center gap-1.5 px-2.5 text-xs ${calendarOpen ? "active-toggle" : ""}`} onClick={onToggleCalendar}>
+      <button className={`soft-button action-compact ${calendarOpen ? "active-toggle" : ""}`} onClick={onToggleCalendar}>
         <CalendarDays size={14} />
         日期
       </button>
-      <button className={`soft-button flex h-8 items-center gap-1.5 px-2.5 text-xs ${reportsOpen ? "active-toggle" : ""}`} onClick={onToggleReports}>
+      <button className={`soft-button action-compact ${reportsOpen ? "active-toggle" : ""}`} onClick={onToggleReports}>
         <BookOpenCheck size={14} />
         回顾{recentReportCount > 0 ? ` · ${recentReportCount}` : ""}
       </button>
@@ -698,7 +698,7 @@ function JournalSearchOverlay({
           placeholder="搜索留下的字句、标签或待办"
           className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink/35"
         />
-        <button className="soft-button flex h-8 w-8 items-center justify-center" onClick={onClose} title="关闭搜索" aria-label="关闭搜索">
+        <button className="soft-button icon-action-compact" onClick={onClose} title="关闭搜索" aria-label="关闭搜索">
           <X size={14} />
         </button>
       </div>
@@ -830,7 +830,7 @@ function JournalDayDocument({
           </div>
         </div>
         <button
-          className="secondary-action h-9 px-3 text-sm"
+          className="secondary-action action-standard"
           disabled={summaryBusy || entries.length === 0}
           onClick={() => void onGenerateSummary(daySummaryPrompt)}
         >
@@ -881,7 +881,7 @@ function JournalDayDocument({
           <EmptyJournal
             text="这一天暂时很安静。"
             action={
-              <button className="primary-button h-9 px-3 text-sm" onClick={onOpenComposerFullscreen}>
+              <button className="primary-button action-standard" onClick={onOpenComposerFullscreen}>
                 写下这一刻
               </button>
             }
@@ -985,24 +985,24 @@ function CompactJournalEntry({
               {relatedCount > 0 && <span className="text-xs text-ink/42">相关 {relatedCount}</span>}
             </div>
             <div className="journal-entry-actions flex flex-wrap items-center gap-1.5 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
-            <button className="ghost-action h-7 px-2 text-[11px]" disabled={savingEdit} onClick={() => onExtractToLibrary(entry)} aria-label="将这条日志交给 AI 沉淀为知识卡片">
+            <button className="ghost-action action-micro" disabled={savingEdit} onClick={() => onExtractToLibrary(entry)} aria-label="将这条日志交给 AI 沉淀为知识卡片">
               <Sparkles size={13} className="mr-1 inline" />
               AI 沉淀
             </button>
-            <button className="ghost-action h-7 px-2 text-[11px]" disabled={savingEdit} onClick={() => onOpenFullscreen(entry)} aria-label="全屏查看这条日志">
+            <button className="ghost-action action-micro" disabled={savingEdit} onClick={() => onOpenFullscreen(entry)} aria-label="全屏查看这条日志">
               <Maximize2 size={13} className="mr-1 inline" />
               全屏
             </button>
-            <button className="ghost-action h-7 px-2 text-[11px]" disabled={savingEdit} onClick={() => (editing ? onSaveEdit(entry) : onStartEdit(entry))} aria-label={editing ? "保存这条日志编辑" : "编辑这条日志"}>
+            <button className="ghost-action action-micro" disabled={savingEdit} onClick={() => (editing ? onSaveEdit(entry) : onStartEdit(entry))} aria-label={editing ? "保存这条日志编辑" : "编辑这条日志"}>
               {savingEdit ? "保存中" : editing ? "保存" : "编辑"}
             </button>
             {editing && (
-              <button className="ghost-action h-7 px-2 text-[11px]" disabled={savingEdit} onClick={onCancelEdit}>
+              <button className="ghost-action action-micro" disabled={savingEdit} onClick={onCancelEdit}>
                 取消
               </button>
             )}
             <button
-              className="danger-icon-action h-7 w-7"
+              className="danger-icon-action icon-action-micro"
               disabled={savingEdit}
               onClick={() => onDeleteEntry(entry.id)}
               title="删除"
@@ -1024,13 +1024,13 @@ function CompactJournalEntry({
               <input
                 value={draftTags}
                 onChange={(event) => onDraftTagsChange(event.target.value)}
-                className="field-control h-9 w-full px-3 text-sm"
+                className="field-control field-standard w-full"
                 placeholder="标签"
               />
               <textarea
                 value={draftTodos}
                 onChange={(event) => onDraftTodosChange(event.target.value)}
-                className="field-control h-9 w-full resize-none overflow-y-auto px-3 py-1.5 text-sm leading-6 scrollbar-thin"
+                className="field-control field-standard w-full resize-none overflow-y-auto py-1.5 leading-6 scrollbar-thin"
                 placeholder="待办"
               />
             </div>
@@ -1043,11 +1043,11 @@ function CompactJournalEntry({
             {(longContent || relatedCount > 0) && (
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               {longContent && (
-                <button className="ghost-action h-7 px-2 text-[11px]" onClick={onToggleExpanded}>
+                <button className="ghost-action action-micro" onClick={onToggleExpanded}>
                   {expanded ? "收起" : "展开"}
                 </button>
               )}
-              <button className={`ghost-action h-7 px-2 text-[11px] ${relatedCount > 0 ? "" : "text-ink/32"}`} onClick={() => setShowLinks((value) => !value)}>
+              <button className={`ghost-action action-micro ${relatedCount > 0 ? "" : "text-ink/32"}`} onClick={() => setShowLinks((value) => !value)}>
                 相关线索{relatedCount > 0 ? ` · ${relatedCount}` : ""}
               </button>
             </div>
@@ -1121,7 +1121,7 @@ function JournalComposer({
           className="flex-1 bg-transparent text-sm leading-7 text-ink outline-none placeholder:text-ink/32 scrollbar-thin"
         />
         <button
-          className="soft-button flex h-8 w-8 shrink-0 items-center justify-center"
+          className="soft-button icon-action-compact"
           onClick={() => setShowMoreFields((value) => !value)}
           title={showMoreFields ? "收起标签与待办" : "标签与待办"}
           aria-label={showMoreFields ? "收起标签与待办" : "展开标签与待办"}
@@ -1130,7 +1130,7 @@ function JournalComposer({
           <MoreHorizontal size={14} />
         </button>
         <button
-          className="soft-button flex h-8 w-8 shrink-0 items-center justify-center"
+          className="soft-button icon-action-compact"
           onClick={onOpenFullscreen}
           title="展开写作"
           aria-label="展开写作"
@@ -1138,7 +1138,7 @@ function JournalComposer({
           <Maximize2 size={14} />
         </button>
         <button
-          className="primary-button flex h-8 shrink-0 items-center gap-1.5 px-3 text-xs"
+          className="primary-button action-compact shrink-0"
           disabled={saving || !content.trim()}
           onClick={onSubmit}
         >
@@ -1152,13 +1152,13 @@ function JournalComposer({
             value={tagText}
             onChange={(event) => onTagTextChange(event.target.value)}
             placeholder="标签，用逗号轻轻分开"
-            className="field-control h-9 px-3 text-sm"
+            className="field-control field-standard"
           />
           <textarea
             value={todoText}
             onChange={(event) => onTodoTextChange(event.target.value)}
             placeholder="待办，可以逗号或换行"
-            className="field-control h-9 resize-none overflow-y-auto px-3 py-1.5 text-sm leading-6 scrollbar-thin"
+            className="field-control field-standard resize-none overflow-y-auto py-1.5 leading-6 scrollbar-thin"
           />
         </div>
       )}
@@ -1214,7 +1214,7 @@ function JournalFullscreenComposer({
             <p className="mt-0.5 text-xs text-ink/45">不用整理成篇，先把真实留下。</p>
           </div>
           <button
-            className="flex h-9 w-9 items-center justify-center rounded-[8px] text-ink/45 transition hover:bg-panel hover:text-ink"
+            className="ghost-action icon-action-standard"
             onClick={onClose}
             title="关闭"
             aria-label="关闭安静写作"
@@ -1238,7 +1238,7 @@ function JournalFullscreenComposer({
                 value={tagText}
                 onChange={(event) => onTagTextChange(event.target.value)}
                 placeholder="例如：工作、灵感、心情"
-                className="field-control mt-1 h-10 w-full px-3 text-sm"
+                className="field-control field-prominent mt-1 w-full"
               />
             </label>
             <label className="block text-xs font-medium text-ink/58">
@@ -1256,13 +1256,13 @@ function JournalFullscreenComposer({
 
         <div className="flex shrink-0 justify-end gap-2 border-t border-line bg-panel px-4 py-3">
           <button
-            className="soft-button h-9 px-3 text-sm"
+            className="soft-button action-standard"
             onClick={onClose}
           >
             回到日志
           </button>
           <button
-            className="primary-button h-9"
+            className="primary-button action-standard"
             disabled={saving || !content.trim()}
             onClick={onSubmit}
           >
@@ -1292,7 +1292,7 @@ function DailySummaryBlock({ report, highlighted = false, stale = false }: { rep
           <h4 className="mt-1 text-sm font-semibold text-ink">{report.title}</h4>
           {stale && <p className="mt-1 text-xs text-copper/75">这一天的日志后来有变化，建议重新总结。</p>}
         </div>
-        <button className="soft-button h-7 px-2 text-[11px]" onClick={() => setExpanded((value) => !value)}>
+        <button className="soft-button action-micro" onClick={() => setExpanded((value) => !value)}>
           {expanded ? "收起" : "展开"}
         </button>
       </div>
@@ -1433,13 +1433,13 @@ function JournalEntryFullscreenOverlay({
             <h2 className="mt-1 truncate text-lg font-semibold text-ink">{entry.entryDate}</h2>
           </div>
           <div className="flex max-w-full items-center gap-2 overflow-x-auto scrollbar-thin">
-            <button className="secondary-action flex h-9 items-center gap-2 px-3 text-sm" onClick={() => void copyEntry()}>
+            <button className="secondary-action action-standard" onClick={() => void copyEntry()}>
               <Copy size={15} />
               复制
             </button>
             {editing && (
               <button
-                className="secondary-action h-9 px-3 text-sm"
+                className="secondary-action action-standard"
                 disabled={saving}
                 onClick={() => {
                   setDraftContent(entry.content);
@@ -1453,13 +1453,13 @@ function JournalEntryFullscreenOverlay({
               </button>
             )}
             <button
-              className={editing ? "primary-action h-9 px-3 text-sm" : "secondary-action h-9 px-3 text-sm"}
+              className={editing ? "primary-action action-standard" : "secondary-action action-standard"}
               disabled={saving}
               onClick={() => (editing ? void save() : setEditing(true))}
             >
               {editing ? (saving ? "保存中" : "保存") : "编辑"}
             </button>
-            <button className="soft-button flex h-9 w-9 items-center justify-center" onClick={requestClose} title="关闭" aria-label="关闭日志全屏查看">
+            <button className="soft-button icon-action-standard" onClick={requestClose} title="关闭" aria-label="关闭日志全屏查看">
               <X size={16} />
             </button>
           </div>
@@ -1479,7 +1479,7 @@ function JournalEntryFullscreenOverlay({
                 <input
                   value={draftTags}
                   onChange={(event) => setDraftTags(event.target.value)}
-                  className="field-control h-10 w-full px-3 text-sm"
+                  className="field-control field-prominent w-full"
                   placeholder="标签"
                 />
                 <textarea
@@ -1549,7 +1549,7 @@ function JournalCalendar({
     <section className="section-surface">
       <div className="mb-3 flex items-center justify-between gap-2">
         <button
-          className="soft-button flex h-8 w-8 items-center justify-center"
+          className="soft-button icon-action-compact"
           onClick={() => onMonthChange(shiftMonth(month, -1))}
           title="上个月"
           aria-label="上个月"
@@ -1558,7 +1558,7 @@ function JournalCalendar({
         </button>
         <div className="text-sm font-semibold text-ink">{monthLabel}</div>
         <button
-          className="soft-button flex h-8 w-8 items-center justify-center"
+          className="soft-button icon-action-compact"
           onClick={() => onMonthChange(shiftMonth(month, 1))}
           title="下个月"
           aria-label="下个月"
@@ -1625,7 +1625,7 @@ function JournalCalendar({
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="truncate text-xs text-ink/45">{selectedDate ? `正在看：${selectedDate}` : "显示今天"}</span>
         <button
-          className="soft-button h-8 px-2.5 text-xs"
+          className="soft-button action-compact"
           onClick={onClearDate}
         >
           回到今天

@@ -91,14 +91,14 @@ export function EditorOverlay({
             <input
               value={draft.title}
               onChange={(event) => onDraftChange({ ...draft, title: event.target.value })}
-              className="field-control h-11 w-full px-3 text-xl font-semibold"
+              className="field-control field-prominent w-full text-xl font-semibold"
               placeholder="标题"
               autoFocus
             />
           </div>
           <div className="flex shrink-0 items-center gap-2 self-end">
             <button
-              className="soft-button flex h-10 w-10 items-center justify-center"
+              className="soft-button icon-action-prominent"
               disabled={saving}
               onClick={requestCancel}
               title="取消"
@@ -107,7 +107,7 @@ export function EditorOverlay({
               <X size={17} />
             </button>
             <button
-              className="primary-button flex h-10 items-center gap-2"
+              className="primary-button action-prominent"
               disabled={saving}
               onClick={() => void save()}
             >

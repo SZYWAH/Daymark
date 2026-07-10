@@ -101,13 +101,13 @@ export function ItemList({
           )}
           <div className="flex items-center gap-2">
             {onCollapse && (
-              <button className={`soft-button h-8 w-8 items-center justify-center ${compact ? "flex" : "hidden xl:flex"}`} title="收起列表" aria-label="收起资料列表" onClick={onCollapse}>
+              <button className={`soft-button icon-action-compact ${compact ? "inline-flex" : "hidden xl:inline-flex"}`} title="收起列表" aria-label="收起资料列表" onClick={onCollapse}>
                 <PanelLeftClose size={16} />
               </button>
             )}
             {!compact && (
               <button
-                className="primary-button flex h-8 items-center gap-1.5 px-2.5 text-xs"
+                className="primary-button action-compact"
                 onClick={onCreateItem}
               >
                 <Plus size={16} />
@@ -117,8 +117,8 @@ export function ItemList({
           </div>
         </div>
 
-        <div ref={searchRef} className="field-control flex h-9 items-center gap-2 px-3">
-          <Search size={16} className="text-ink/45" />
+        <div ref={searchRef} className="field-control field-standard flex items-center gap-2">
+          <Search size={16} className="text-ink/50" />
           <input
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
@@ -227,7 +227,7 @@ function ItemCard({
     <article
       role="button"
       tabIndex={0}
-      className={`item-card library-card group type-${item.type} block w-full cursor-pointer px-3 py-2.5 text-left ${
+      className={`item-card library-card group type-${item.type} block w-full cursor-pointer px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-copper/35 ${
         selected ? "selected-card" : ""
       }`}
       onClick={onClick}
@@ -247,14 +247,14 @@ function ItemCard({
           </span>
           <div className="min-w-0 flex-1">
             <h3 className="poetic-heading truncate text-[14px] leading-5">{item.title}</h3>
-            <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-ink/40">
+            <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-ink/50">
               <span className="truncate">{folderPath}</span>
               <span className="shrink-0">更新 {item.updatedAt}</span>
             </div>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <span className="text-[11px] text-ink/45">{item.processStatus}</span>
+          <span className="text-[11px] text-ink/60">{item.processStatus}</span>
           {item.favorite ? <Star size={14} className="fill-copper text-copper" /> : null}
         </div>
       </div>
@@ -278,7 +278,7 @@ function EmptyState({
       <p className="text-sm font-semibold text-ink">{title}</p>
       <p className="mt-2 max-w-[26rem] text-sm leading-6 text-ink/52">{description}</p>
       {actionLabel && onAction && (
-        <button className="secondary-action mt-5 flex h-9 items-center gap-2 px-3 text-sm" onClick={onAction}>
+        <button className="secondary-action action-standard mt-5" onClick={onAction}>
           <Plus size={16} />
           {actionLabel}
         </button>

@@ -2526,14 +2526,14 @@ export default function App() {
                       onSelectView={(view) => handleSelectView({ kind: "smart", id: view })}
                     />
                     <button
-                      className="primary-button h-8 px-3 text-xs"
+                      className="primary-button action-compact"
                       onClick={handleCreateItem}
                     >
                       导入资料
                     </button>
                     {layout.libraryListCollapsed && (
                       <button
-                        className="secondary-action h-8 px-3 text-xs"
+                        className="secondary-action action-compact"
                         onClick={() => updateLayout({ libraryListCollapsed: false })}
                       >
                         切换资料
@@ -2769,7 +2769,7 @@ function MobileLibrarySwitcher({
     <section className="border-b border-line/70 px-4 py-2 lg:hidden">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="text-xs font-medium text-ink/42">资料视图</div>
-        <button className="ghost-action h-7 px-2 text-[11px]" type="button" onClick={onCreateFolder}>
+        <button className="ghost-action action-micro" type="button" onClick={onCreateFolder}>
           新建目录
         </button>
       </div>

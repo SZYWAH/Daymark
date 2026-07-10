@@ -57,7 +57,7 @@ export function EditForm({ draft, folders, tagText, onDraftChange, onTagTextChan
           value={tagText}
           onChange={(event) => onTagTextChange(event.target.value)}
           placeholder="用逗号分隔，例如：论文，资料，待阅读"
-          className="field-control mt-1 h-10 w-full px-3 text-sm"
+          className="field-control field-prominent mt-1 w-full"
         />
       </label>
 
@@ -79,7 +79,7 @@ export function EditForm({ draft, folders, tagText, onDraftChange, onTagTextChan
             value={draft.filePath ?? ""}
             onChange={(event) => updateField("filePath", event.target.value || undefined)}
             placeholder="D:\\资料库\\documents\\example.pdf"
-            className="field-control mt-1 h-10 w-full px-3 text-sm"
+            className="field-control field-prominent mt-1 w-full"
           />
         </label>
 
@@ -89,7 +89,7 @@ export function EditForm({ draft, folders, tagText, onDraftChange, onTagTextChan
             value={draft.sourceUrl ?? ""}
             onChange={(event) => updateField("sourceUrl", event.target.value || undefined)}
             placeholder="https://example.com"
-            className="field-control mt-1 h-10 w-full px-3 text-sm"
+            className="field-control field-prominent mt-1 w-full"
           />
         </label>
       </div>

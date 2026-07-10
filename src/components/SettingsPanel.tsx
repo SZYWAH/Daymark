@@ -314,7 +314,7 @@ export function SettingsPanel({
       actions={
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
           <button
-            className={`${dirty ? "primary-action" : "secondary-action"} flex h-9 items-center gap-2 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-55`}
+            className={`${dirty ? "primary-action" : "secondary-action"} action-standard text-xs disabled:cursor-not-allowed disabled:opacity-55`}
             disabled={saving || themeSaving || !dirty}
             onClick={saveSettings}
           >
@@ -322,7 +322,7 @@ export function SettingsPanel({
             {saving ? "保存中" : "保存"}
           </button>
           <button
-            className="secondary-action flex h-9 items-center gap-2 px-3 text-xs"
+            className="secondary-action action-standard text-xs"
             disabled={testing || saving || themeSaving}
             onClick={testConnection}
           >
@@ -419,7 +419,7 @@ export function SettingsPanel({
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
-                className="secondary-action flex h-10 items-center gap-2 px-4 text-xs"
+                className="secondary-action action-prominent text-xs"
                 disabled={Boolean(backupBusy)}
                 onClick={exportBackup}
               >
@@ -427,7 +427,7 @@ export function SettingsPanel({
                 {backupBusy === "export" ? "导出中" : "导出核心备份"}
               </button>
               <button
-                className="secondary-action flex h-10 items-center gap-2 px-4 text-xs"
+                className="secondary-action action-prominent text-xs"
                 disabled={Boolean(backupBusy)}
                 onClick={startRestoreBackup}
               >
@@ -495,7 +495,7 @@ export function SettingsPanel({
               </div>
             </div>
             <button
-              className="soft-button flex h-9 shrink-0 items-center gap-1.5 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+              className="soft-button action-standard shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-50"
               disabled={!autoWorkReviewEnabled || autoWorkReviewRunning}
               onClick={() => void onRunAutoWorkReview()}
             >
@@ -554,7 +554,7 @@ export function SettingsPanel({
               <input
                 value={draft.model}
                 onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                className="field-control mt-1 h-10 w-full px-3 text-sm"
+                className="field-control field-prominent mt-1 w-full"
               />
             </label>
           </div>
@@ -566,7 +566,7 @@ export function SettingsPanel({
                 value={draft.customProviderName ?? ""}
                 onChange={(event) => setDraft({ ...draft, customProviderName: event.target.value })}
                 placeholder="例如 OpenAI、硅基流动、OpenRouter"
-                className="field-control mt-1 h-10 w-full px-3 text-sm"
+                className="field-control field-prominent mt-1 w-full"
               />
             </label>
           )}
@@ -583,7 +583,7 @@ export function SettingsPanel({
                   manualKeyClearRequested: false,
                 })
               }
-              className="field-control mt-1 h-10 w-full px-3 text-sm"
+              className="field-control field-prominent mt-1 w-full"
             />
           </label>
 
@@ -620,10 +620,10 @@ export function SettingsPanel({
                       : "填写 API Key；保存后进入系统凭据"
                     : "填写 API Key；Web 模式保存在本机应用数据中"
                 }
-                className="field-control h-10 min-w-0 flex-1 px-3 text-sm"
+                className="field-control field-prominent min-w-0 flex-1"
               />
               <button
-                className="soft-button flex h-10 shrink-0 items-center gap-1.5 px-3 text-xs"
+                className="soft-button action-prominent shrink-0 text-xs"
                 disabled={!draft.manualApiKey && !draft.manualKeyStored}
                 onClick={() => {
                   if (draft.manualApiKey?.trim()) {
@@ -824,7 +824,7 @@ function CodexProbePanel() {
           </p>
         </div>
         <button
-          className="secondary-action flex h-10 items-center gap-2 px-4"
+          className="secondary-action action-prominent"
           disabled={!desktop || probing}
           onClick={runProbe}
         >

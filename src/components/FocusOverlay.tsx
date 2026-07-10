@@ -24,7 +24,7 @@ export function FocusOverlay({
         <header className="flex items-center justify-between border-b border-line bg-panel/70 px-5 py-3">
           <h3 className="text-sm font-semibold text-ink">{title}</h3>
           <button
-            className="flex h-8 w-8 items-center justify-center rounded-[8px] text-ink/45 transition hover:bg-panel hover:text-ink"
+            className="ghost-action icon-action-compact"
             onClick={onClose}
           >
             <X size={16} />

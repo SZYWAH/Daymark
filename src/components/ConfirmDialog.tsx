@@ -82,7 +82,7 @@ export function ConfirmDialog({
             </p>
           </div>
           <button
-            className="soft-button flex h-8 w-8 shrink-0 items-center justify-center"
+            className="soft-button icon-action-compact"
             disabled={busy}
             onClick={onCancel}
             title="关闭"
@@ -92,11 +92,11 @@ export function ConfirmDialog({
           </button>
         </div>
         <div className="mt-5 flex justify-end gap-2">
-          <button className="secondary-action h-9 px-3 text-sm" disabled={busy} onClick={onCancel}>
+          <button className="secondary-action action-standard" disabled={busy} onClick={onCancel}>
             {cancelLabel}
           </button>
           <button
-            className={`${danger ? "danger-action" : "primary-button"} flex h-9 items-center gap-2 px-3`}
+            className={`${danger ? "danger-action" : "primary-button"} action-standard`}
             disabled={busy}
             onClick={() => void confirm()}
           >
@@ -206,7 +206,7 @@ export function PromptDialog({
             )}
           </div>
           <button
-            className="soft-button flex h-8 w-8 shrink-0 items-center justify-center"
+            className="soft-button icon-action-compact"
             disabled={busy}
             onClick={onCancel}
             title="关闭"
@@ -217,18 +217,18 @@ export function PromptDialog({
         </div>
         <input
           autoFocus
-          className="field-control mt-4 h-10 w-full px-3 text-sm"
+          className="field-control field-prominent mt-4 w-full"
           onChange={(event) => setValue(event.target.value)}
           placeholder={placeholder}
           ref={inputRef}
           value={value}
         />
         <div className="mt-5 flex justify-end gap-2">
-          <button className="secondary-action h-9 px-3 text-sm" disabled={busy} onClick={onCancel}>
+          <button className="secondary-action action-standard" disabled={busy} onClick={onCancel}>
             {cancelLabel}
           </button>
           <button
-            className="primary-button flex h-9 items-center gap-2 px-3"
+            className="primary-button action-standard"
             disabled={busy || !value.trim()}
             onClick={() => void submit()}
           >

@@ -92,7 +92,7 @@ export function Sidebar({
     return (
       <aside className="sidebar-surface items-center overflow-hidden px-2" style={sidebarStyle}>
         <button
-          className="soft-button mb-3 flex h-9 w-9 items-center justify-center"
+          className="soft-button icon-action-standard mb-3"
           onClick={onToggleCollapsed}
           title="展开侧栏"
           aria-label="展开侧栏"
@@ -158,7 +158,7 @@ export function Sidebar({
       <aside className="sidebar-surface overflow-hidden" style={sidebarStyle}>
         <div className="mb-3 flex items-center justify-end gap-2">
           <button
-            className="soft-button flex h-8 w-8 items-center justify-center"
+            className="soft-button icon-action-compact"
             onMouseDown={onResizeStart}
             title="拖动调整侧栏宽度"
             aria-label="拖动调整侧栏宽度"
@@ -166,7 +166,7 @@ export function Sidebar({
             <span className="h-4 w-1 rounded-full bg-line" />
           </button>
           <button
-            className="soft-button flex h-8 w-8 items-center justify-center"
+            className="soft-button icon-action-compact"
             onClick={onToggleCollapsed}
             title="折叠侧栏"
             aria-label="折叠侧栏"
@@ -174,7 +174,7 @@ export function Sidebar({
             <PanelLeftClose size={15} />
           </button>
           <button
-            className="soft-button flex h-8 w-8 items-center justify-center text-[11px]"
+            className="soft-button icon-action-compact text-[11px]"
             onClick={onResetLayout}
             title="重置布局"
             aria-label="重置布局"
@@ -238,7 +238,7 @@ export function Sidebar({
     <aside className="sidebar-surface overflow-hidden" style={sidebarStyle}>
       <div className="mb-3 flex items-center justify-end gap-2">
         <button
-          className="soft-button flex h-8 w-8 items-center justify-center"
+          className="soft-button icon-action-compact"
           onMouseDown={onResizeStart}
           title="拖动调整侧栏宽度"
           aria-label="拖动调整侧栏宽度"
@@ -246,7 +246,7 @@ export function Sidebar({
           <span className="h-4 w-1 rounded-full bg-line" />
         </button>
         <button
-          className="soft-button flex h-8 w-8 items-center justify-center"
+          className="soft-button icon-action-compact"
           onClick={onToggleCollapsed}
           title="折叠侧栏"
           aria-label="折叠侧栏"
@@ -254,7 +254,7 @@ export function Sidebar({
           <PanelLeftClose size={15} />
         </button>
         <button
-          className="soft-button flex h-8 w-8 items-center justify-center text-[11px]"
+          className="soft-button icon-action-compact text-[11px]"
           onClick={onResetLayout}
           title="重置布局"
           aria-label="重置布局"
@@ -539,7 +539,7 @@ function FolderRow({
               重命名
             </button>
             <button
-              className="danger-icon-action h-8 w-full justify-start gap-2 px-2 text-left text-xs"
+              className="danger-icon-action action-compact w-full justify-start text-left"
               aria-label={`删除目录 ${folder.title}`}
               onClick={(event) => {
                 event.stopPropagation();

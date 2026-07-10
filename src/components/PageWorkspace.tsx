@@ -158,7 +158,7 @@ export function CollapsibleRail({
   if (collapsed) {
     return (
       <aside className={`collapsed-rail ${side === "left" ? "order-first" : ""}`}>
-        <button className="soft-button flex h-10 w-10 items-center justify-center" onClick={onToggle} title={`展开${title}`} aria-label={`展开${title}`}>
+        <button className="soft-button icon-action-prominent" onClick={onToggle} title={`展开${title}`} aria-label={`展开${title}`}>
           <ToggleIcon size={16} />
         </button>
         <span className="collapsed-rail-label text-[11px] font-medium text-ink/42">{title}</span>
@@ -177,7 +177,7 @@ export function CollapsibleRail({
             {Icon && <Icon size={15} className="text-ink/48" />}
             <span className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-ink/48">{title}</span>
           </div>
-          <button className="soft-button flex h-8 w-8 items-center justify-center" onClick={onToggle} title={`收起${title}`} aria-label={`收起${title}`}>
+          <button className="soft-button icon-action-compact" onClick={onToggle} title={`收起${title}`} aria-label={`收起${title}`}>
             <ToggleIcon size={15} />
           </button>
         </div>
@@ -190,7 +190,7 @@ export function CollapsibleRail({
 
 export function PanelZoomButton({ onClick, title = "放大查看" }: { onClick: () => void; title?: string }) {
   return (
-    <button className="soft-button flex h-8 w-8 items-center justify-center" onClick={onClick} title={title} aria-label={title}>
+    <button className="soft-button icon-action-compact" onClick={onClick} title={title} aria-label={title}>
       <Maximize2 size={14} />
     </button>
   );

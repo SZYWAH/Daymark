@@ -146,7 +146,7 @@ export function LinkPanel({
           相关内容
         </div>
         <button
-          className="soft-button flex h-8 items-center gap-1.5 px-2.5 text-xs"
+          className="soft-button action-compact"
           onClick={() => setOpen(true)}
         >
           <Plus size={14} />
@@ -169,7 +169,7 @@ export function LinkPanel({
             return (
               <ResultRow key={link.id} className="flex items-start gap-2">
                 <button
-                  className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-surface text-ink/50"
+                  className="ghost-action icon-action-micro mt-0.5 bg-surface"
                   onClick={() => onOpenEntity(linked.kind, linked.id)}
                   title="打开"
                   aria-label="打开关联内容"
@@ -194,7 +194,7 @@ export function LinkPanel({
                   </BoundedPreview>
                 </button>
                 <button
-                  className="danger-icon-action h-7 w-7 shrink-0"
+                  className="danger-icon-action icon-action-micro"
                   disabled={deletingId === link.id}
                   onClick={() => setPendingDeleteId(link.id)}
                   title="删除关联"
@@ -232,7 +232,7 @@ export function LinkPanel({
                 <p className="mt-0.5 text-xs text-ink/45">只记录关系，不移动或读取真实文件。</p>
               </div>
               <button
-                className="flex h-8 w-8 items-center justify-center rounded-[8px] text-ink/45 transition hover:bg-surface hover:text-ink"
+                className="ghost-action icon-action-compact"
                 onClick={() => setOpen(false)}
                 aria-label="关闭"
                 title="关闭"
@@ -248,10 +248,10 @@ export function LinkPanel({
                   value={relation}
                   onChange={(event) => setRelation(event.target.value)}
                   placeholder="关系，例如：相关、提炼自"
-                  className="field-control h-10 px-3 text-sm"
+                  className="field-control field-prominent"
                 />
-                <div className="flex h-10 items-center gap-2 rounded-[8px] border border-line bg-surface px-3">
-                  <Search size={16} className="text-ink/40" />
+                <div className="field-control field-prominent flex items-center gap-2">
+                  <Search size={16} className="ui-text-meta" />
                   <input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}

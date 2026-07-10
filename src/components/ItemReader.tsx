@@ -168,7 +168,7 @@ export function ItemReader({
           </div>
           <h2 className="text-lg font-semibold text-ink">选择一条资料</h2>
           <p className="mt-2 max-w-[24rem] text-sm leading-6 text-ink/52">资料详情会在这里阅读、整理和运行 AI 操作。</p>
-          <button className="secondary-action mt-5 h-9 px-4 text-sm" onClick={onCreate}>
+          <button className="secondary-action action-standard mt-5" onClick={onCreate}>
             导入资料
           </button>
         </div>
@@ -325,7 +325,7 @@ function ReaderHero({
         <div className="min-w-0 flex-1">
           <div className="mb-2 flex min-w-0 flex-wrap items-center gap-1.5">
             {showBackButton && (
-              <button className="soft-button mr-1 flex h-8 items-center gap-1.5 px-2.5 text-xs" onClick={onBackToList}>
+              <button className="soft-button action-compact mr-1" onClick={onBackToList}>
                 <PanelLeft size={14} />
                 返回列表
               </button>
@@ -354,10 +354,10 @@ function ReaderHero({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button className="soft-button flex h-8 w-8 items-center justify-center" onClick={onToggleFavorite} title={item.favorite ? "取消收藏" : "收藏"} aria-label={item.favorite ? "取消收藏这份资料" : "收藏这份资料"}>
+          <button className="soft-button icon-action-compact" onClick={onToggleFavorite} title={item.favorite ? "取消收藏" : "收藏"} aria-label={item.favorite ? "取消收藏这份资料" : "收藏这份资料"}>
             <Star size={15} className={item.favorite ? "fill-ink text-ink" : ""} />
           </button>
-          <button className="secondary-action flex h-8 items-center gap-1.5 px-3 text-xs" onClick={onEdit}>
+          <button className="secondary-action action-compact" onClick={onEdit}>
             <Edit3 size={14} />
             编辑
           </button>
@@ -436,7 +436,7 @@ function ReaderWorkbench({
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <button
-            className={`${complete ? "secondary-action" : "primary-action"} reader-workbench-toggle flex h-8 items-center justify-center gap-1.5 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-60 ${panelOpen ? "reader-workbench-toggle-open" : ""}`}
+            className={`${complete ? "secondary-action" : "primary-action"} action-compact reader-workbench-toggle disabled:cursor-not-allowed disabled:opacity-60 ${panelOpen ? "reader-workbench-toggle-open" : ""}`}
             aria-expanded={panelOpen}
             onClick={() => {
               setPanelOpen((value) => !value);
@@ -447,7 +447,7 @@ function ReaderWorkbench({
             {aiRunningAction ? "处理中" : "整理 / AI"}
           </button>
           {aiRunningAction && (
-            <button className="soft-button h-8 px-2.5 text-xs" type="button" onClick={onCancelAiAction}>
+            <button className="soft-button action-compact" type="button" onClick={onCancelAiAction}>
               停止
             </button>
           )}
@@ -501,7 +501,7 @@ function ReaderWorkbench({
                 <span>大纲 {outlineCount}</span>
               </div>
               <button
-                className={`soft-button h-8 px-2.5 text-xs ${aiToolsOpen ? "active-toggle" : ""}`}
+                className={`soft-button action-compact ${aiToolsOpen ? "active-toggle" : ""}`}
                 type="button"
                 onClick={() => setAiToolsOpen((value) => !value)}
               >
@@ -516,7 +516,7 @@ function ReaderWorkbench({
                     return (
                       <button
                         key={action.id}
-                        className="reader-ai-action-button flex h-8 items-center justify-start gap-1.5 px-2.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                        className="reader-ai-action-button action-compact justify-start text-left disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={Boolean(aiRunningAction)}
                         title={action.description}
                         onClick={() => {
@@ -540,7 +540,7 @@ function ReaderWorkbench({
           </div>
           <div className="mt-2 flex items-center justify-between gap-2 border-t border-line/60 pt-2">
             <span className="text-xs text-ink/38">危险操作会再次确认。</span>
-            <button className="danger-action inline-flex h-8 items-center gap-1.5 px-2.5 text-xs" onClick={onDelete} title="删除资料" aria-label="删除资料">
+            <button className="danger-action action-compact" onClick={onDelete} title="删除资料" aria-label="删除资料">
               <Trash2 size={15} />
               删除资料
             </button>
@@ -725,12 +725,12 @@ function AiResultPanel({ state, resultPersisted = false }: { state: AiRunDisplay
       )}
       <div className="mt-3 flex flex-wrap gap-2">
         {resultText && (
-          <button className="ghost-action h-7 px-2 text-[11px]" onClick={() => setExpanded((value) => !value)}>
+          <button className="ghost-action action-micro" onClick={() => setExpanded((value) => !value)}>
             {expanded ? "收起结果" : "展开结果"}
           </button>
         )}
         {state.preview && (
-          <button className="ghost-action h-7 px-2 text-[11px]" onClick={() => setPreviewOpen((value) => !value)}>
+          <button className="ghost-action action-micro" onClick={() => setPreviewOpen((value) => !value)}>
             {previewOpen ? "收起预览" : "查看提取预览"}
           </button>
         )}
@@ -741,7 +741,7 @@ function AiResultPanel({ state, resultPersisted = false }: { state: AiRunDisplay
 
 function IconTextButton({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick: () => void }) {
   return (
-    <button className="secondary-action inline-flex h-8 items-center gap-1.5 px-2.5 text-xs" onClick={onClick}>
+    <button className="secondary-action action-compact" onClick={onClick}>
       <Icon size={14} />
       {label}
     </button>

@@ -422,15 +422,15 @@ function MemoryDocumentPanel({
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="soft-button flex h-9 items-center gap-2 px-3 text-xs" onClick={() => setEditing((value) => !value)}>
+          <button className="soft-button action-standard text-xs" onClick={() => setEditing((value) => !value)}>
             {editing ? "阅读" : "编辑"}
           </button>
-          <button className="soft-button flex h-9 items-center gap-2 px-3 text-xs" onClick={() => setZoomOpen(true)}>
+          <button className="soft-button action-standard text-xs" onClick={() => setZoomOpen(true)}>
             <Maximize2 size={14} />
             放大
           </button>
           <button
-            className="primary-button flex h-9 items-center gap-2 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+            className="primary-button action-standard text-xs disabled:cursor-not-allowed disabled:opacity-60"
             disabled={saving || !dirty}
             onClick={save}
           >
@@ -472,7 +472,7 @@ function MemoryDocumentPanel({
           </div>
           <div className="mt-3 flex justify-end">
             <button
-              className="primary-button flex h-9 items-center gap-2 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+              className="primary-button action-standard text-xs disabled:cursor-not-allowed disabled:opacity-60"
               disabled={saving || !dirty}
               onClick={() => void save()}
             >
@@ -710,7 +710,7 @@ function MemoryPatchDraftsPanel({
               />
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
-                  className="primary-button flex h-8 items-center gap-1.5 px-2.5 text-xs disabled:opacity-60"
+                  className="primary-button action-compact disabled:opacity-60"
                   disabled={Boolean(busyId)}
                   onClick={() => void applyDraft(draft)}
                 >
@@ -718,7 +718,7 @@ function MemoryPatchDraftsPanel({
                   {pendingApplyId === draft.id ? "再次确认" : "确认写入"}
                 </button>
                 <button
-                  className="danger-action flex h-8 items-center gap-1.5 px-2.5 text-xs disabled:opacity-60"
+                  className="danger-action action-compact disabled:opacity-60"
                   disabled={Boolean(busyId)}
                   onClick={() => void ignoreDraft(draft)}
                 >
@@ -1035,7 +1035,7 @@ function CodexReviewWorkbench({
         </div>
         <div className="flex flex-wrap gap-2">
           <button
-            className="soft-button flex h-8 items-center gap-1.5 px-2.5 text-xs"
+            className="soft-button action-compact"
             disabled={indexedSessions.length === 0}
             onClick={() => setSessionOverlayOpen(true)}
           >
@@ -1044,7 +1044,7 @@ function CodexReviewWorkbench({
           </button>
           {generating && (
             <button
-              className="danger-action flex h-8 items-center gap-1.5 px-2.5 text-xs"
+              className="danger-action action-compact"
               onClick={cancel}
             >
               <X size={13} />
@@ -1052,7 +1052,7 @@ function CodexReviewWorkbench({
             </button>
           )}
           <button
-            className="secondary-action flex h-8 items-center gap-1.5 px-2.5 text-xs"
+            className="secondary-action action-compact"
             disabled={!desktop || scanning}
             onClick={scan}
           >
@@ -1076,7 +1076,7 @@ function CodexReviewWorkbench({
       )}
 
       <div className="mb-1.5 grid shrink-0 gap-1.5 md:grid-cols-[150px_150px_150px_72px_minmax(0,1fr)_minmax(0,1fr)]">
-        <label className="space-y-0.5 text-[11px] text-ink/42">
+        <label className="space-y-0.5 text-[11px] text-ink/50">
           来源
           <SelectMenu
             value={sourceFilter}
@@ -1086,10 +1086,10 @@ function CodexReviewWorkbench({
               { value: "claude", label: "Claude Code" },
             ]}
             onChange={(value) => setSourceFilter(value as "all" | ConversationSourceKind)}
-            triggerClassName="h-9 px-2.5 text-xs"
+            triggerClassName="field-standard px-2.5 text-xs"
           />
         </label>
-        <label className="space-y-0.5 text-[11px] text-ink/42">
+        <label className="space-y-0.5 text-[11px] text-ink/50">
           起始日期
           <DatePickerPopover
             value={dateFrom}
@@ -1099,7 +1099,7 @@ function CodexReviewWorkbench({
             buttonLabel="选择起始日期"
           />
         </label>
-        <label className="space-y-0.5 text-[11px] text-ink/42">
+        <label className="space-y-0.5 text-[11px] text-ink/50">
           结束日期
           <DatePickerPopover
             value={dateTo}
@@ -1109,23 +1109,23 @@ function CodexReviewWorkbench({
             buttonLabel="选择结束日期"
           />
         </label>
-        <label className="space-y-0.5 text-[11px] text-ink/42">
+        <label className="space-y-0.5 text-[11px] text-ink/50">
           快捷
           <button
             type="button"
-            className={`soft-button h-9 w-full px-2.5 text-xs ${dateFrom === todayKey && dateTo === todayKey ? "active-toggle" : ""}`}
+            className={`soft-button action-standard w-full text-xs ${dateFrom === todayKey && dateTo === todayKey ? "active-toggle" : ""}`}
             onClick={filterToday}
           >
             今日
           </button>
         </label>
-        <label className="space-y-0.5 text-[11px] text-ink/42">
+        <label className="space-y-0.5 text-[11px] text-ink/50">
           路径筛选
-          <input value={cwdQuery} onChange={(event) => setCwdQuery(event.target.value)} className="field-control h-9 w-full px-2 text-xs" placeholder="例如 个人知识库" />
+          <input value={cwdQuery} onChange={(event) => setCwdQuery(event.target.value)} className="field-control field-standard w-full px-2 text-xs" placeholder="例如 个人知识库" />
         </label>
-        <label className="space-y-0.5 text-[11px] text-ink/42">
+        <label className="space-y-0.5 text-[11px] text-ink/50">
           关键词
-          <input value={keyword} onChange={(event) => setKeyword(event.target.value)} className="field-control h-9 w-full px-2 text-xs" placeholder="标题、意图、路径" />
+          <input value={keyword} onChange={(event) => setKeyword(event.target.value)} className="field-control field-standard w-full px-2 text-xs" placeholder="标题、意图、路径" />
         </label>
       </div>
 
@@ -1134,11 +1134,11 @@ function CodexReviewWorkbench({
           已选 {selectedIds.size} 个会话 · {formatBytes(selectedBytes)} · 生成时才读取正文
         </div>
         <div className="flex gap-2">
-          <button className="soft-button h-8 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-50" disabled={scanFiltersChanged} onClick={toggleVisible}>
+          <button className="soft-button action-compact disabled:cursor-not-allowed disabled:opacity-50" disabled={scanFiltersChanged} onClick={toggleVisible}>
             {indexedSessions.length > 0 && indexedSessions.every((session) => selectedIds.has(session.id)) ? "取消全选" : "全选当前"}
           </button>
           <button
-            className="primary-button flex h-8 items-center gap-1.5 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+            className="primary-button action-compact disabled:cursor-not-allowed disabled:opacity-60"
             disabled={!desktop || generating || selectedIds.size === 0 || scanFiltersChanged}
             onClick={generate}
           >
@@ -1209,7 +1209,7 @@ function CodexReviewWorkbench({
                 <div className="mt-1 text-xs text-ink/45">{previewMeta || "点击左侧会话后，本地读取并脱敏显示正文。"}</div>
               </div>
               {previewText && (
-                <button className="soft-button h-8 px-2.5 text-xs" onClick={() => void copyPreviewText()}>
+                <button className="soft-button action-compact" onClick={() => void copyPreviewText()}>
                   复制
                 </button>
               )}
@@ -1483,7 +1483,7 @@ function ReviewArchivePanel({
           </div>
           <p className="mt-1 text-xs leading-5 text-ink/45">按来源与日期轻量筛选，细读时再打开大层。</p>
         </div>
-        <button className="soft-button h-8 px-2.5 text-xs" onClick={() => setDateSearchOpen((value) => !value)}>
+        <button className="soft-button action-compact" onClick={() => setDateSearchOpen((value) => !value)}>
           日期
         </button>
       </div>
@@ -1499,10 +1499,10 @@ function ReviewArchivePanel({
         ].map(([value, label]) => (
           <button
             key={value}
-            className={`h-7 rounded-[8px] border px-2 text-[11px] transition ${
+            className={`action-micro rounded-[8px] border transition ${
               sourceFilter === value
                 ? "border-moss/35 bg-moss/15 text-moss"
-                : "border-line bg-panel/70 text-ink/45 hover:text-ink"
+                : "border-line bg-panel/70 text-ink/50 hover:text-ink"
             }`}
             onClick={() => setSourceFilter(value as typeof sourceFilter)}
           >
@@ -1513,7 +1513,7 @@ function ReviewArchivePanel({
 
       {dateSearchOpen && (
         <div className="grid shrink-0 gap-2 sm:grid-cols-2">
-          <label className="space-y-0.5 text-[11px] text-ink/42">
+          <label className="space-y-0.5 text-[11px] text-ink/50">
             起始日期
             <DatePickerPopover
               value={dateFrom}
@@ -1523,7 +1523,7 @@ function ReviewArchivePanel({
               buttonLabel="选择档案起始日期"
             />
           </label>
-          <label className="space-y-0.5 text-[11px] text-ink/42">
+          <label className="space-y-0.5 text-[11px] text-ink/50">
             结束日期
             <DatePickerPopover
               value={dateTo}
@@ -1561,18 +1561,18 @@ function ReviewArchivePanel({
                     <h3 className="line-clamp-2 text-anywhere text-sm font-semibold text-ink">{draft.title}</h3>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
-                    <button className="soft-button h-7 px-2 text-[11px]" onClick={() => setExpandedDraftId(expanded ? "" : draft.id)}>
+                    <button className="soft-button action-micro" onClick={() => setExpandedDraftId(expanded ? "" : draft.id)}>
                       {expanded ? "收起" : "预览"}
                     </button>
                     <button
-                      className="soft-button h-7 px-2 text-[11px]"
+                      className="soft-button action-micro"
                       disabled={Boolean(draftAction)}
                       onClick={() => void ignoreDraft(draft)}
                     >
                       {ignoring ? "忽略中" : "忽略"}
                     </button>
                     <button
-                      className="primary-button h-7 px-2.5 text-[11px]"
+                      className="primary-button action-micro"
                       disabled={Boolean(draftAction)}
                       onClick={() => void applyDraft(draft)}
                     >
@@ -1603,7 +1603,7 @@ function ReviewArchivePanel({
                   已有 {reviews.map((review) => review.sourceLabel).join("、")} 回顾，可由你手动合成一份总档案。
                 </p>
                 <button
-                  className="soft-button mt-2 h-8 px-2.5 text-xs"
+                  className="soft-button action-compact mt-2"
                   disabled={Boolean(combiningDate)}
                   onClick={() => void combine(date, reviews)}
                 >
@@ -1712,7 +1712,7 @@ function RollingWorkReviewArchiveOverlay({
           {` · ${review.processedSessionCount} 次会话增量 · ${review.processedChars.toLocaleString("zh-CN")} 字符`}
         </div>
         <button
-          className="primary-button flex h-8 items-center gap-1.5 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+          className="primary-button action-compact disabled:cursor-not-allowed disabled:opacity-60"
           disabled={archived || archiving}
           onClick={onArchive}
         >
@@ -1755,7 +1755,7 @@ function SummaryReportReaderOverlay({ report, onClose }: { report: SummaryReport
               {getSummaryReportLabel(report.periodType)} · {report.periodStart} 至 {report.periodEnd}
             </p>
           </div>
-          <button className="soft-button flex h-8 w-8 items-center justify-center" onClick={onClose} aria-label="关闭日志回顾">
+          <button className="soft-button icon-action-compact" onClick={onClose} aria-label="关闭日志回顾" title="关闭">
             <X size={16} />
           </button>
         </header>
@@ -1766,7 +1766,7 @@ function SummaryReportReaderOverlay({ report, onClose }: { report: SummaryReport
         </div>
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-panel/70 px-5 py-3">
           <p className="text-xs text-ink/45">只读档案；如需重新生成，请回到日志页对应日期。</p>
-          <button className="secondary-action h-9 px-3 text-sm" onClick={onClose}>关闭</button>
+          <button className="secondary-action action-standard" onClick={onClose}>关闭</button>
         </footer>
       </section>
     </div>
@@ -1947,7 +1947,7 @@ function ReviewReaderOverlay({
             <h3 className="mt-1 text-lg font-semibold text-ink">细读回顾</h3>
             <p className="mt-1 text-xs text-ink/45">{review.date} · {review.sessionCount} 个会话</p>
           </div>
-          <button className="flex h-8 w-8 items-center justify-center rounded-[8px] text-ink/45 transition hover:bg-panel hover:text-ink disabled:cursor-not-allowed disabled:opacity-45" disabled={saving} onClick={requestClose}>
+          <button className="ghost-action icon-action-compact disabled:cursor-not-allowed disabled:opacity-45" disabled={saving} onClick={requestClose} title="关闭" aria-label="关闭回顾阅读层">
             <X size={16} />
           </button>
         </header>
@@ -1959,7 +1959,7 @@ function ReviewReaderOverlay({
               setTitle(event.target.value);
               setPendingRegenerate(false);
             }}
-            className="field-control mb-3 h-11 w-full px-3 text-base font-semibold"
+            className="field-control field-prominent mb-3 w-full text-base font-semibold"
           />
           <textarea
             value={content}
@@ -1976,7 +1976,7 @@ function ReviewReaderOverlay({
               <h4 className="text-sm font-semibold text-ink">{comparison.title}</h4>
               <p className="mt-2 max-h-[240px] overflow-y-auto whitespace-pre-wrap text-anywhere pr-1 text-sm leading-7 text-ink/64 scrollbar-thin">{comparison.content}</p>
               <button
-                className="soft-button mt-3 h-8 px-2.5 text-xs"
+                className="soft-button action-compact mt-3"
                 onClick={() => {
                   setTitle(comparison.title);
                   setContent(comparison.content);
@@ -1994,7 +1994,7 @@ function ReviewReaderOverlay({
           <div className="flex gap-2">
             {dirty && (
               <button
-                className="soft-button h-9 px-3 text-xs"
+                className="soft-button action-standard text-xs"
                 disabled={saving || regenerating}
                 onClick={() => {
                   setTitle(review.title);
@@ -2006,12 +2006,12 @@ function ReviewReaderOverlay({
               </button>
             )}
             {regenerating && (
-              <button className="secondary-action h-9 px-3 text-xs" onClick={() => cancelRegenerate(false)}>
+              <button className="secondary-action action-standard text-xs" onClick={() => cancelRegenerate(false)}>
                 停止
               </button>
             )}
             <button
-              className="soft-button flex h-9 items-center gap-2 px-3 text-xs font-medium disabled:opacity-60"
+              className="soft-button action-standard text-xs font-medium disabled:opacity-60"
               disabled={regenerating}
               onClick={regenerate}
             >
@@ -2019,7 +2019,7 @@ function ReviewReaderOverlay({
               {pendingRegenerate ? "确认生成草稿" : "生成新草稿"}
             </button>
             <button
-              className="primary-button flex h-9 items-center gap-2 px-3 text-xs disabled:opacity-60"
+              className="primary-button action-standard text-xs disabled:opacity-60"
               disabled={saving}
               onClick={save}
             >
@@ -2113,7 +2113,7 @@ function LegacyMemorySection({
                   <div className="flex gap-1.5">
                     {memory.status === "candidate" && (
                       <button
-                        className="primary-button h-7 px-2 text-[11px]"
+                        className="primary-button action-micro"
                         onClick={() => onUpdateMemory(memory.id, { status: "active" })}
                       >
                         确认
@@ -2121,7 +2121,7 @@ function LegacyMemorySection({
                     )}
                     {memory.status === "active" && (
                       <button
-                        className="soft-button flex h-7 items-center gap-1 px-2 text-[11px]"
+                        className="soft-button action-micro"
                         onClick={() => onUpdateMemory(memory.id, { status: "archived" })}
                       >
                         <Archive size={12} />

@@ -104,7 +104,7 @@ export function ExtractDialog({
             <p className="mt-1 text-sm text-ink/52">把这一段日常，整理成可以长期留下的知识。</p>
           </div>
           <button
-            className="soft-button flex h-9 w-9 items-center justify-center"
+            className="soft-button icon-action-standard"
             disabled={saving}
             onClick={requestClose}
             aria-label="关闭知识卡片草稿"
@@ -120,7 +120,7 @@ export function ExtractDialog({
               <span>正在整理知识卡片草稿...</span>
               {localMessage && <span className="text-xs text-ink/50">{localMessage}</span>}
               {loading && (
-                <button className="soft-button h-9 px-3 text-xs" onClick={onCancelGeneration}>
+                <button className="soft-button action-standard text-xs" onClick={onCancelGeneration}>
                   取消生成
                 </button>
               )}
@@ -133,7 +133,7 @@ export function ExtractDialog({
               <input
                 value={draft.title}
                 onChange={(event) => onDraftChange({ ...draft, title: event.target.value })}
-                className="field-control mt-1 h-10 w-full px-3 text-sm"
+                className="field-control field-prominent mt-1 w-full"
               />
             </label>
             <label className="block text-xs font-medium text-ink/58">
@@ -151,7 +151,7 @@ export function ExtractDialog({
               <input
                 value={draft.tags.join("，")}
                 onChange={(event) => onDraftChange({ ...draft, tags: parseTags(event.target.value) })}
-                className="field-control mt-1 h-10 w-full px-3 text-sm"
+                className="field-control field-prominent mt-1 w-full"
               />
             </label>
             <label className="block text-xs font-medium text-ink/58">
@@ -174,14 +174,14 @@ export function ExtractDialog({
             </label>
             <div className="flex justify-end gap-2">
               <button
-                className="soft-button h-10 px-4 text-sm"
+                className="soft-button action-prominent"
                 disabled={saving}
                 onClick={requestClose}
               >
                 取消
               </button>
               <button
-                className="primary-button flex h-10 items-center gap-2"
+                className="primary-button action-prominent"
                 disabled={saving || loading}
                 onClick={() => void save()}
               >

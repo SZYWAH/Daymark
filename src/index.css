@@ -293,11 +293,67 @@ button {
   }
 
   .ghost-action {
-    @apply rounded-[8px] border border-transparent bg-transparent px-3 text-sm text-ink/50 transition hover:border-line hover:bg-surface/60 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
+    @apply rounded-[8px] border border-transparent bg-transparent px-3 text-sm text-ink/60 transition hover:border-line hover:bg-surface/60 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .reader-ai-action-button {
     @apply rounded-[8px] border border-line/70 bg-surface/45 font-medium text-ink/65 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition hover:border-copper/35 hover:bg-panel/70 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .action-micro {
+    @apply inline-flex h-7 items-center justify-center gap-1 px-2 text-[11px] leading-none;
+  }
+
+  .action-compact {
+    @apply inline-flex h-8 items-center justify-center gap-1.5 px-2.5 text-xs leading-none;
+  }
+
+  .action-standard {
+    @apply inline-flex h-9 items-center justify-center gap-1.5 px-3 text-sm leading-none;
+  }
+
+  .action-prominent {
+    @apply inline-flex h-10 items-center justify-center gap-2 px-4 text-sm leading-none;
+  }
+
+  .icon-action-compact {
+    @apply inline-flex h-8 w-8 shrink-0 items-center justify-center p-0;
+  }
+
+  .icon-action-micro {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center p-0;
+  }
+
+  .icon-action-standard {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center p-0;
+  }
+
+  .icon-action-prominent {
+    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center p-0;
+  }
+
+  .field-standard {
+    @apply h-9 px-3 text-sm;
+  }
+
+  .field-prominent {
+    @apply h-10 px-3 text-sm;
+  }
+
+  .ui-text-primary {
+    @apply text-ink;
+  }
+
+  .ui-text-body {
+    @apply text-ink/70;
+  }
+
+  .ui-text-meta {
+    @apply text-ink/50;
+  }
+
+  .ui-text-faint {
+    @apply text-ink/35;
   }
 
   @media (pointer: coarse) {
@@ -306,6 +362,7 @@ button {
     }
   }
 
+  button:focus-visible,
   .primary-button:focus-visible,
   .primary-action:focus-visible,
   .secondary-action:focus-visible,

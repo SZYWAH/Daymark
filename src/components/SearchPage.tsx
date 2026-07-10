@@ -120,8 +120,8 @@ export function SearchPage({ onOpenResult, refreshKey = 0 }: SearchPageProps) {
       meta={query.trim() ? `${totalCount} 条结果` : "等一个关键词"}
     >
       <div className="flex h-full min-h-0 flex-col px-4 pb-20 pt-4 sm:pb-4">
-        <div className="field-control flex h-12 shrink-0 items-center gap-3 px-4">
-          <Search size={19} className="text-ink/45" />
+        <div className="field-control field-prominent flex shrink-0 items-center gap-3">
+          <Search size={19} className="ui-text-meta" />
           <input
             autoFocus={shouldAutoFocus}
             value={query}
@@ -136,7 +136,7 @@ export function SearchPage({ onOpenResult, refreshKey = 0 }: SearchPageProps) {
             className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink/35"
           />
           {query && (
-            <button className="ghost-action flex h-8 w-8 items-center justify-center p-0" onClick={() => setQuery("")} title="清空搜索" aria-label="清空搜索">
+            <button className="ghost-action icon-action-compact" onClick={() => setQuery("")} title="清空搜索" aria-label="清空搜索">
               <X size={15} />
             </button>
           )}
@@ -224,7 +224,7 @@ function SearchGroup({
 
       {canLoadMore && (
         <button
-          className="soft-button mt-3 h-9 px-3 text-sm"
+          className="soft-button action-standard mt-3"
           onClick={onLoadMore}
         >
           加载更多结果

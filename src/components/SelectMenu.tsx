@@ -184,7 +184,7 @@ export function SelectMenu({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="搜索"
-              className="field-control h-9 w-full px-3 text-sm"
+              className="field-control field-standard w-full"
               autoFocus
             />
           </div>
@@ -241,7 +241,7 @@ export function SelectMenu({
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-activedescendant={activeOptionId}
-        className={`field-control flex w-full items-center justify-between gap-2 text-left shadow-sm hover:border-copper/35 hover:bg-copper/10 disabled:cursor-not-allowed disabled:opacity-60 ${triggerClassName || "h-10 px-3 text-sm"}`}
+        className={`field-control flex w-full items-center justify-between gap-2 text-left shadow-sm hover:border-copper/35 hover:bg-copper/10 disabled:cursor-not-allowed disabled:opacity-60 ${triggerClassName || "field-prominent"}`}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
@@ -251,7 +251,7 @@ export function SelectMenu({
         }}
       >
         <span className={selected ? "truncate" : "truncate text-ink/40"}>{selected?.label ?? placeholder}</span>
-        <ChevronDown size={15} className={`shrink-0 text-ink/45 transition ${open ? "rotate-180" : ""}`} />
+        <ChevronDown size={15} className={`shrink-0 text-ink/50 transition ${open ? "rotate-180" : ""}`} />
       </button>
 
       {menu && createPortal(menu, document.body)}
