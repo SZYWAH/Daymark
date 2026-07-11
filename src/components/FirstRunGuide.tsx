@@ -95,6 +95,10 @@ export function FirstRunGuide({ open, onStart, onDismiss }: FirstRunGuideProps) 
           对话，整理成每日工作回顾和长期记忆。
         </p>
 
+        <p className="mt-2 text-xs leading-5 text-ink/42">
+          资料库已准备少量示例，帮助你快速了解目录和整理方式；可在设置中随时删除。
+        </p>
+
         <ol className="mt-6 flex flex-col gap-3 border-y border-line py-4 text-sm font-medium text-ink/72 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
           <li className="flex items-center gap-2">
             <span className="text-xs text-ink/35">01</span>

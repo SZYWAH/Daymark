@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { animate } from "animejs";
 import { listen } from "@tauri-apps/api/event";
+import { PanelLeftOpen } from "lucide-react";
 import {
   extractMemoryCandidates,
   generateLibraryCardFromJournal,
@@ -86,6 +87,14 @@ import { flattenFolderOptions, getFolderAndDescendantIds } from "./lib/folders";
 import { applyThemeMode, bindSystemThemeListener } from "./lib/theme";
 import { getSafeErrorMessage } from "./lib/redaction";
 import { markOnboardingCompleted, shouldShowOnboarding } from "./lib/onboarding";
+import {
+  DEMO_LIBRARY_ROOT_ID,
+  getDemoLibraryState,
+  initializeDemoLibraryForFirstRun,
+  installDemoLibrary,
+  removeDemoLibrary,
+  type DemoLibraryState,
+} from "./data/demoLibrary";
 import { ATTENTION_READING_STATUSES, getAttentionPriority, isAttentionItem } from "./lib/libraryViews";
 import {
   extractLocalFileText,
@@ -215,7 +224,7 @@ const ITEM_EDITOR_DRAFT_STORAGE_KEY = "personal-knowledge-base:item-editor-draft
 const DEFAULT_LAYOUT_STATE: ResizableLayoutState = {
   sidebarWidth: 204,
   sidebarCollapsed: false,
-  libraryDirectoryWidth: 360,
+  libraryDirectoryWidth: 248,
   libraryListWidth: 640,
   libraryListCollapsed: false,
   libraryDirectoryCollapsed: false,
@@ -262,8 +271,8 @@ function normalizeLayoutState(input: Partial<ResizableLayoutState>): ResizableLa
     sidebarCollapsed: Boolean(input.sidebarCollapsed ?? DEFAULT_LAYOUT_STATE.sidebarCollapsed),
     libraryDirectoryWidth: clampNumber(
       input.libraryDirectoryWidth ?? DEFAULT_LAYOUT_STATE.libraryDirectoryWidth,
-      300,
-      620,
+      220,
+      320,
     ),
     libraryListWidth: clampNumber(input.libraryListWidth ?? DEFAULT_LAYOUT_STATE.libraryListWidth, 560, 860),
     libraryListCollapsed: Boolean(input.libraryListCollapsed ?? DEFAULT_LAYOUT_STATE.libraryListCollapsed),
@@ -485,6 +494,7 @@ function getFilteredItems(
   activeView: ActiveView,
   statusFilter: StatusFilter,
   query: string,
+  activeFolderIds?: ReadonlySet<string>,
 ) {
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -492,7 +502,7 @@ function getFilteredItems(
     .filter((item) => {
       const viewMatch =
         activeView.kind === "folder"
-          ? item.folderId === activeView.folderId
+          ? Boolean(item.folderId && activeFolderIds?.has(item.folderId))
           : activeView.kind === "smart"
             ? matchSmartView(item, activeView.id)
             : true;
@@ -576,6 +586,7 @@ export default function App() {
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const [folderPrompt, setFolderPrompt] = useState<FolderPromptState | null>(null);
   const [firstRunGuideOpen, setFirstRunGuideOpen] = useState(false);
+  const [demoLibraryState, setDemoLibraryState] = useState<DemoLibraryState>({ installed: false, itemCount: 0, folderCount: 0 });
   const [firstRunGuideAutoPending, setFirstRunGuideAutoPending] = useState(() => shouldShowOnboarding());
   const [todayComposerFocusRequest, setTodayComposerFocusRequest] = useState(0);
   const [layout, setLayout] = useState<ResizableLayoutState>(() => loadLayoutState());
@@ -665,6 +676,7 @@ export default function App() {
     async function loadData() {
       try {
         await seedDemoDataInDevIfEnabled();
+        const demoInitialization = await initializeDemoLibraryForFirstRun();
         const dashboardSeq = nextTodayDashboardSeq();
         const memorySharedSeq = nextMemorySharedSeq();
         const todayKey = toDateKey(new Date());
@@ -708,6 +720,7 @@ export default function App() {
         if (!mounted) return;
         setItems(loadedItems);
         setFolders(loadedFolders);
+        setDemoLibraryState(await getDemoLibraryState());
         setSettings(loadedSettingsResult.settings);
         setAutoWorkReviewSettings(loadedAutoWorkReviewSettings);
         setRollingWorkReviews(loadedRollingWorkReviews);
@@ -728,6 +741,10 @@ export default function App() {
         setLinks(loadedLinks);
         applyTodayDashboardIfCurrent(dashboardSeq, loadedDashboard);
         setSelectedId("");
+        if (demoInitialization.installed) {
+          setActiveView({ kind: "folder", folderId: DEMO_LIBRARY_ROOT_ID });
+          setLastListView({ kind: "folder", folderId: DEMO_LIBRARY_ROOT_ID });
+        }
       } catch (loadError) {
         if (!mounted) return;
         setError(getSafeErrorMessage(loadError, "加载数据失败。"));
@@ -755,9 +772,16 @@ export default function App() {
     window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
   }, [layout]);
 
+  const activeFolderIds = useMemo(
+    () =>
+      activeView.kind === "folder"
+        ? new Set(getFolderAndDescendantIds(folders, activeView.folderId))
+        : undefined,
+    [activeView, folders],
+  );
   const filteredItems = useMemo(
-    () => getFilteredItems(items, activeView, statusFilter, query),
-    [activeView, items, query, statusFilter],
+    () => getFilteredItems(items, activeView, statusFilter, query, activeFolderIds),
+    [activeFolderIds, activeView, items, query, statusFilter],
   );
 
   const selectedItem =
@@ -1467,6 +1491,30 @@ export default function App() {
         },
       });
     });
+
+  const handleInstallDemoLibrary = async () => {
+    const nextState = await installDemoLibrary();
+    setDemoLibraryState(nextState);
+    await refreshLibraryData();
+    handleSelectView({ kind: "folder", folderId: DEMO_LIBRARY_ROOT_ID });
+  };
+
+  const handleRemoveDemoLibrary = () => {
+    setPendingConfirm({
+      title: "删除示例资料",
+      message: "确定删除 Daymark 示例资料吗？你对示例内容所做的修改也会删除。你自行放入示例目录的资料会保留。",
+      confirmLabel: "删除示例",
+      danger: true,
+      onConfirm: async () => {
+        const nextState = await removeDemoLibrary();
+        setDemoLibraryState(nextState);
+        await refreshLibraryData();
+        if (activeView.kind === "folder" && activeView.folderId.startsWith("daymark-demo-v1-folder-")) {
+          handleSelectView({ kind: "smart", id: "attention" });
+        }
+      },
+    });
+  };
 
   const handleStartEdit = () => {
     if (!selectedItem) return;
@@ -2388,10 +2436,10 @@ export default function App() {
           activeView={activeView}
           selectedItemId={selectedItem?.id}
           collapsed={libraryViewActive ? layout.libraryDirectoryCollapsed : layout.sidebarCollapsed}
-          width={(libraryViewActive ? layout.libraryDirectoryCollapsed : layout.sidebarCollapsed)
-            ? 64
-            : libraryViewActive
-              ? layout.libraryDirectoryWidth
+          width={libraryViewActive
+            ? layout.libraryDirectoryWidth
+            : layout.sidebarCollapsed
+              ? 64
               : layout.sidebarWidth}
           onSelectView={handleSelectView}
           onSelectItem={handleSelectItem}
@@ -2405,23 +2453,25 @@ export default function App() {
           }
           onResizeStart={
             libraryViewActive
-              ? startLayoutResize("libraryDirectoryWidth", 300, 620)
+              ? startLayoutResize("libraryDirectoryWidth", 220, 320)
               : startLayoutResize("sidebarWidth", 176, 232)
           }
           onResetLayout={resetLayout}
         />
 
-        <div
-          className="resize-handle hidden h-full shrink-0 lg:block"
-          onMouseDown={
-            libraryViewActive
-              ? startLayoutResize("libraryDirectoryWidth", 300, 620)
-              : startLayoutResize("sidebarWidth", 176, 232)
-          }
-          title="拖动调整侧栏宽度"
-          role="separator"
-          aria-label="拖动调整侧栏宽度"
-        />
+        {(!libraryViewActive || !layout.libraryDirectoryCollapsed) && (
+          <div
+            className="resize-handle hidden h-full shrink-0 lg:block"
+            onMouseDown={
+              libraryViewActive
+                ? startLayoutResize("libraryDirectoryWidth", 220, 320)
+                : startLayoutResize("sidebarWidth", 176, 232)
+            }
+            title={libraryViewActive ? "拖动调整目录宽度" : "拖动调整侧栏宽度"}
+            role="separator"
+            aria-label={libraryViewActive ? "拖动调整目录宽度" : "拖动调整侧栏宽度"}
+          />
+        )}
 
         <div ref={workspaceRef} className="min-h-0 min-w-0 flex-1">
           {activeView.kind === "today" ? (
@@ -2520,6 +2570,9 @@ export default function App() {
                 onDirtyChange={setSettingsDirty}
                 onRestoreCoreBackup={handleRestoreCoreBackup}
                 onOpenOnboarding={() => setFirstRunGuideOpen(true)}
+                demoLibraryState={demoLibraryState}
+                onInstallDemoLibrary={handleInstallDemoLibrary}
+                onRemoveDemoLibrary={handleRemoveDemoLibrary}
               />
             ) : (
               <section className="workspace-surface">
@@ -2557,6 +2610,16 @@ export default function App() {
                   <div className="min-w-0">
                     <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/42">Library</p>
                     <div className="mt-1 flex min-w-0 flex-wrap items-end gap-3">
+                      {layout.libraryDirectoryCollapsed && (
+                        <button
+                          className="soft-button icon-action-compact hidden lg:flex"
+                          onClick={() => updateLayout({ libraryDirectoryCollapsed: false })}
+                          title="展开目录"
+                          aria-label="展开目录"
+                        >
+                          <PanelLeftOpen size={15} />
+                        </button>
+                      )}
                       <h2 className="truncate text-[26px] font-semibold tracking-normal text-ink lg:text-[30px]">资料库</h2>
                       <div className="min-w-0 truncate text-sm text-ink/46">{filteredItems.length} 条资料</div>
                     </div>

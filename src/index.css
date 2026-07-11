@@ -388,6 +388,18 @@ button {
     @apply border-white/25 bg-transparent text-ink shadow-sm ring-1 ring-white/10;
   }
 
+  .folder-tree-row[data-folder-depth="0"]:not(.nav-row-active) {
+    @apply font-medium text-ink/90;
+  }
+
+  .folder-tree-row[data-folder-depth="1"]:not(.nav-row-active) {
+    @apply text-ink/70;
+  }
+
+  .folder-tree-row[data-folder-depth="2"]:not(.nav-row-active) {
+    @apply text-ink/60;
+  }
+
   .nav-count {
     @apply rounded-full bg-surface/80 px-1.5 py-0.5 text-xs text-ink/50;
   }

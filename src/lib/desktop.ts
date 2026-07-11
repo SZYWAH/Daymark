@@ -351,6 +351,7 @@ export async function getQuickCapturePanelToken() {
 
 export type QuickCaptureRuntimeState = {
   state: "MainVisible" | "HotzoneVisible" | "PanelOpen" | "PanelDetached" | "Paused" | "Degraded";
+  anchor: "left" | "center" | "right";
   panelToken: number;
   hotzoneToken: number;
   paused: boolean;
@@ -362,16 +363,30 @@ export type QuickCaptureRuntimeState = {
   escapeError?: string | null;
 };
 
+export type QuickCaptureDragResult = {
+  applied: boolean;
+  stillDragging: boolean;
+  detached: boolean;
+  anchor: "left" | "center" | "right";
+  pointerOutside: boolean;
+};
+
 export async function getQuickCaptureRuntimeState() {
   if (!isDesktopRuntime()) return null;
 
   return invoke<QuickCaptureRuntimeState>("get_quick_capture_runtime_state");
 }
 
-export async function setQuickCaptureDetached(detached: boolean, token?: number) {
-  if (!isDesktopRuntime()) return;
+export async function finalizeQuickCaptureDrag(token?: number) {
+  if (!isDesktopRuntime()) return null;
 
-  await invoke("set_quick_capture_detached", { detached, token });
+  return invoke<QuickCaptureDragResult>("finalize_quick_capture_drag", { token });
+}
+
+export async function collapseQuickCaptureIfPointerOutside(token?: number) {
+  if (!isDesktopRuntime()) return false;
+
+  return invoke<boolean>("collapse_quick_capture_if_pointer_outside", { token }).catch(() => false);
 }
 
 export async function setQuickCaptureSaving(saving: boolean, token?: number) {

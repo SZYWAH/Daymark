@@ -32,6 +32,7 @@ import {
   type TodayDashboardData,
 } from "../types";
 import { getThemeMode, saveThemeMode } from "../lib/theme";
+import { filterDemoLibraryFromBackup } from "./demoLibraryModel";
 
 const DB_NAME = "personal-knowledge-base";
 const DB_VERSION = 11;
@@ -66,6 +67,10 @@ type ItemPatch = Partial<Omit<Item, "id" | "createdAt" | "updatedAt">>;
 type CreateItemInput = Partial<Omit<Item, "id" | "createdAt" | "updatedAt">>;
 type FolderPatch = Partial<Omit<FolderNode, "id" | "createdAt" | "updatedAt">>;
 type CreateFolderInput = Pick<FolderNode, "title"> & Partial<Pick<FolderNode, "parentId" | "sortOrder" | "kind">>;
+export type LibraryRecordsInput = {
+  items: Item[];
+  folders: FolderNode[];
+};
 type JournalPatch = Partial<Omit<JournalEntry, "id" | "createdAt" | "updatedAt">>;
 type CreateJournalInput = Partial<Omit<JournalEntry, "id" | "createdAt" | "updatedAt">>;
 type CreateSummaryInput = Omit<SummaryReport, "id" | "createdAt" | "updatedAt">;
@@ -584,7 +589,7 @@ export async function archiveRollingWorkReview(date: string) {
 }
 
 export async function exportCoreBackup(): Promise<DaymarkCoreBackupV1> {
-  const [items, folders, journalEntries, memoryDocument, memoryCards, links] = await Promise.all([
+  const [allItems, allFolders, journalEntries, memoryDocument, memoryCards, allLinks] = await Promise.all([
     getItems(),
     getFolders(),
     getJournalEntries(),
@@ -592,6 +597,11 @@ export async function exportCoreBackup(): Promise<DaymarkCoreBackupV1> {
     getMemoryCards(),
     getKnowledgeLinks(),
   ]);
+  const { items, folders, links } = filterDemoLibraryFromBackup({
+    items: allItems,
+    folders: allFolders,
+    links: allLinks,
+  });
   const payload: DaymarkCoreBackupPayload = {
     items,
     folders,
@@ -1477,6 +1487,16 @@ export async function getConversationSessionIndex() {
 export async function getMemoryDocument() {
   const db = await getDb();
   return (await db.get(MEMORY_DOCUMENT_STORE, "main")) ?? null;
+}
+
+export async function putLibraryRecords({ items, folders }: LibraryRecordsInput) {
+  const db = await getDb();
+  const tx = db.transaction([ITEM_STORE, FOLDER_STORE], "readwrite");
+  await Promise.all([
+    ...folders.map((folder) => tx.objectStore(FOLDER_STORE).put(folder)),
+    ...items.map((item) => tx.objectStore(ITEM_STORE).put(normalizeItem(item))),
+  ]);
+  await tx.done;
 }
 
 async function getSavedMemoryDocument() {

@@ -8,18 +8,19 @@ import {
   type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createJournalEntry } from "../data/itemStore";
 import {
   getQuickCapturePanelToken,
   getQuickCaptureRuntimeState,
+  collapseQuickCaptureIfPointerOutside,
+  finalizeQuickCaptureDrag,
   hideQuickCapturePanel,
   isDesktopRuntime,
   notifyQuickCaptureSaved,
   openMainFromQuickCapture,
   quickCaptureWindowReady,
   returnQuickCaptureToHotzone,
-  setQuickCaptureDetached,
   setQuickCaptureSaving,
   showQuickCapturePanel,
 } from "../lib/desktop";
@@ -28,13 +29,9 @@ import { applyThemeMode, bindSystemThemeListener, getThemeMode } from "../lib/th
 
 const QUICK_CAPTURE_DRAFT_KEY = "personal-knowledge-base:quick-capture-draft:v1";
 const QUICK_CAPTURE_DIRTY_KEY = "personal-knowledge-base:quick-capture-dirty:v1";
-const DETACHED_TOP_THRESHOLD_PX = 48;
-const HOTZONE_HOVER_DELAY_MS = 240;
-
 export function QuickCaptureHotzoneWindow() {
   const openingRef = useRef(false);
   const readyTokenRef = useRef(0);
-  const hoverTimerRef = useRef<number | undefined>(undefined);
 
   useQuickCaptureDocument("quick-capture-hotzone");
 
@@ -84,8 +81,6 @@ export function QuickCaptureHotzoneWindow() {
         if (event.payload && readyTokenRef.current && event.payload !== readyTokenRef.current) return;
         readyTokenRef.current = 0;
         openingRef.current = false;
-        window.clearTimeout(hoverTimerRef.current);
-        hoverTimerRef.current = undefined;
       }).then((handler) => {
         if (disposed) {
           handler();
@@ -103,7 +98,6 @@ export function QuickCaptureHotzoneWindow() {
       window.clearTimeout(timer);
       window.clearTimeout(lateTimer);
       window.clearInterval(safetyPoll);
-      window.clearTimeout(hoverTimerRef.current);
     };
   }, []);
 
@@ -130,24 +124,9 @@ export function QuickCaptureHotzoneWindow() {
     }, 900);
   };
 
-  const scheduleOpenFromHover = () => {
-    if (openingRef.current || hoverTimerRef.current) return;
-    hoverTimerRef.current = window.setTimeout(() => {
-      hoverTimerRef.current = undefined;
-      openFromHotzone("hover");
-    }, HOTZONE_HOVER_DELAY_MS);
-  };
-
-  const cancelHoverOpen = () => {
-    window.clearTimeout(hoverTimerRef.current);
-    hoverTimerRef.current = undefined;
-  };
-
   return (
     <main
       className="quick-capture-hotzone-screen"
-      onPointerEnter={scheduleOpenFromHover}
-      onPointerLeave={cancelHoverOpen}
       onClick={() => openFromHotzone("click")}
     >
       <button
@@ -158,8 +137,6 @@ export function QuickCaptureHotzoneWindow() {
           event.stopPropagation();
           openFromHotzone("click");
         }}
-        onPointerEnter={scheduleOpenFromHover}
-        onPointerLeave={cancelHoverOpen}
         title="打开快速记录"
       >
         <span className="quick-capture-hotzone-glow" />
@@ -287,12 +264,14 @@ function QuickCaptureStablePanel() {
   const [detached, setDetached] = useState(false);
   const savingRef = useRef(false);
   const savedClosingRef = useRef(false);
+  const contentRef = useRef(content);
+  const composingRef = useRef(false);
   const draggingRef = useRef(false);
   const pointerInsideRef = useRef(false);
   const saveCloseTimerRef = useRef<number | undefined>(undefined);
   const saveCloseFallbackTimerRef = useRef<number | undefined>(undefined);
   const leaveTimerRef = useRef<number | undefined>(undefined);
-  const dragTimerRefs = useRef<number[]>([]);
+  const dragFinalizeTimerRef = useRef<number | undefined>(undefined);
   const focusTimerRefs = useRef<number[]>([]);
   const panelTokenRef = useRef<number | undefined>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -326,33 +305,9 @@ function QuickCaptureStablePanel() {
     return token;
   };
 
-  const syncDetachedFromPosition = async () => {
-    if (!isDesktopRuntime()) return;
-    const token = await resolvePanelToken();
-    if (!token) return;
-    const position = await getCurrentWindow().outerPosition().catch(() => null);
-    if (!position) return;
-    const monitor = await currentMonitor().catch(() => null);
-    const monitorTop = monitor?.position?.y ?? 0;
-    const nextDetached = position.y - monitorTop > DETACHED_TOP_THRESHOLD_PX;
-    setDetached(nextDetached);
-    await setQuickCaptureDetached(nextDetached, token).catch(() => undefined);
-  };
-
-  const syncDetachedFromWindowTop = async (windowTop: number) => {
-    if (!isDesktopRuntime()) return;
-    const token = await resolvePanelToken();
-    if (!token) return;
-    const monitor = await currentMonitor().catch(() => null);
-    const monitorTop = monitor?.position?.y ?? 0;
-    const nextDetached = windowTop - monitorTop > DETACHED_TOP_THRESHOLD_PX;
-    setDetached(nextDetached);
-    await setQuickCaptureDetached(nextDetached, token).catch(() => undefined);
-  };
-
   const clearDragTimers = () => {
-    dragTimerRefs.current.forEach((timer) => window.clearTimeout(timer));
-    dragTimerRefs.current = [];
+    window.clearTimeout(dragFinalizeTimerRef.current);
+    dragFinalizeTimerRef.current = undefined;
   };
 
   const clearFocusTimers = () => {
@@ -389,20 +344,43 @@ function QuickCaptureStablePanel() {
     });
   };
 
-  const finishWindowDrag = () => {
+  const finalizeWindowDrag = async () => {
     clearDragTimers();
-    dragTimerRefs.current = [120, 360, 900, 1_600, 2_600].map((delay) =>
-      window.setTimeout(() => {
-        void syncDetachedFromPosition().finally(() => {
-          if (delay >= 2_600) {
-            draggingRef.current = false;
-            if (!pointerInsideRef.current) {
-              scheduleAutoClose();
-            }
-          }
-        });
-      }, delay),
-    );
+    draggingRef.current = false;
+    let token = await resolvePanelToken();
+    let result = await finalizeQuickCaptureDrag(token).catch(() => null);
+    if (result?.stillDragging) {
+      draggingRef.current = true;
+      finishWindowDrag();
+      return;
+    }
+    if (result && !result.applied) {
+      const runtime = await getQuickCaptureRuntimeState().catch(() => null);
+      if (runtime?.panelToken && runtime.panelToken !== token) {
+        token = runtime.panelToken;
+        panelTokenRef.current = token;
+        result = await finalizeQuickCaptureDrag(token).catch(() => null);
+      }
+    }
+    if (result?.stillDragging) {
+      draggingRef.current = true;
+      finishWindowDrag();
+      return;
+    }
+    if (!result?.applied) return;
+    setDetached(result.detached);
+    if (!result.detached && result.pointerOutside) {
+      pointerInsideRef.current = false;
+      scheduleAutoClose();
+    }
+  };
+
+  const finishWindowDrag = () => {
+    if (!draggingRef.current) return;
+    clearDragTimers();
+    dragFinalizeTimerRef.current = window.setTimeout(() => {
+      void finalizeWindowDrag();
+    }, 180);
   };
 
   const startWindowDrag = async (event: ReactPointerEvent<HTMLElement>) => {
@@ -419,23 +397,38 @@ function QuickCaptureStablePanel() {
     }
   };
 
+  const runWithLatestPanelToken = async (action: (token?: number) => Promise<boolean>) => {
+    let token = await resolvePanelToken();
+    let completed = await action(token);
+    if (completed) return true;
+    const runtime = await getQuickCaptureRuntimeState().catch(() => null);
+    if (
+      runtime?.panelToken
+      && runtime.panelToken !== token
+      && (runtime.state === "PanelOpen" || runtime.state === "PanelDetached")
+    ) {
+      token = runtime.panelToken;
+      panelTokenRef.current = token;
+      completed = await action(token);
+    }
+    return completed;
+  };
+
   const returnToHotzone = async () => {
     if (savingRef.current || savedClosingRef.current) return;
-    const token = await resolvePanelToken();
-    await returnQuickCaptureToHotzone(token);
+    await runWithLatestPanelToken(returnQuickCaptureToHotzone);
   };
 
   const closePanel = async () => {
     if (savingRef.current || savedClosingRef.current) return;
-    const token = await resolvePanelToken();
     const runtime = await getQuickCaptureRuntimeState().catch(() => null);
     if (runtime?.state === "PanelDetached") {
       setDetached(true);
-      await returnQuickCaptureToHotzone(token);
+      await runWithLatestPanelToken(returnQuickCaptureToHotzone);
       return;
     }
     setDetached(false);
-    await hideQuickCapturePanel(token);
+    await runWithLatestPanelToken(hideQuickCapturePanel);
   };
 
   const cancelAutoClose = () => {
@@ -448,13 +441,8 @@ function QuickCaptureStablePanel() {
     window.clearTimeout(leaveTimerRef.current);
     leaveTimerRef.current = window.setTimeout(() => {
       if (draggingRef.current) return;
-      void getQuickCaptureRuntimeState()
-        .then((runtime) => {
-          if (runtime?.state === "PanelDetached") return;
-          return closePanel();
-        })
-        .catch(() => hideQuickCapturePanel(panelTokenRef.current));
-    }, content.trim() ? 1_800 : 720);
+      void runWithLatestPanelToken(collapseQuickCaptureIfPointerOutside);
+    }, contentRef.current.trim() ? 1_800 : 720);
   };
 
   const handlePointerEnter = () => {
@@ -468,6 +456,7 @@ function QuickCaptureStablePanel() {
   };
 
   useEffect(() => {
+    contentRef.current = content;
     writeQuickCaptureDraft(content);
   }, [content]);
 
@@ -477,13 +466,11 @@ function QuickCaptureStablePanel() {
     };
     window.addEventListener("pointerup", finishIfDragging, true);
     window.addEventListener("pointercancel", finishIfDragging, true);
-    window.addEventListener("mouseup", finishIfDragging, true);
     window.addEventListener("blur", finishIfDragging);
     document.addEventListener("visibilitychange", finishIfDragging);
     return () => {
       window.removeEventListener("pointerup", finishIfDragging, true);
       window.removeEventListener("pointercancel", finishIfDragging, true);
-      window.removeEventListener("mouseup", finishIfDragging, true);
       window.removeEventListener("blur", finishIfDragging);
       document.removeEventListener("visibilitychange", finishIfDragging);
     };
@@ -515,9 +502,9 @@ function QuickCaptureStablePanel() {
     const poll = window.setInterval(syncVisiblePanel, 700);
     let unlistenMoved: (() => void) | undefined;
     if (isDesktopRuntime()) {
-      void getCurrentWindow().onMoved(({ payload }) => {
+      void getCurrentWindow().onMoved(() => {
         if (!draggingRef.current) return;
-        void syncDetachedFromWindowTop(payload.y);
+        finishWindowDrag();
       }).then((handler) => {
         unlistenMoved = handler;
       }).catch(() => undefined);
@@ -619,7 +606,7 @@ function QuickCaptureStablePanel() {
   useEffect(() => {
     const onQuickCaptureKey = (event: KeyboardEvent) => {
       if (event.type !== "keydown") return;
-      if (event.isComposing || event.key === "Process") return;
+      if (event.isComposing || composingRef.current || event.key === "Process" || event.keyCode === 229) return;
       if (isEscapeKey(event)) {
         event.preventDefault();
         event.stopPropagation();
@@ -627,10 +614,12 @@ function QuickCaptureStablePanel() {
         return;
       }
 
-      if (event.type === "keydown" && (event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         event.stopPropagation();
-        void save();
+        if (!event.repeat) {
+          void save();
+        }
       }
     };
 
@@ -698,6 +687,7 @@ function QuickCaptureStablePanel() {
     saveCloseTimerRef.current = undefined;
     saveCloseFallbackTimerRef.current = undefined;
     cancelAutoClose();
+    contentRef.current = value;
     if (!savingRef.current && message) showStatus("");
     writeQuickCaptureDraft(value);
     setContent(value);
@@ -707,9 +697,6 @@ function QuickCaptureStablePanel() {
     <main className="quick-capture-panel-screen">
       <div
         className="quick-capture-panel-motion"
-        onMouseEnter={handlePointerEnter}
-        onMouseLeave={handlePointerLeave}
-        onMouseUp={finishWindowDrag}
         onPointerEnter={handlePointerEnter}
         onPointerUp={finishWindowDrag}
         onPointerCancel={finishWindowDrag}
@@ -747,6 +734,12 @@ function QuickCaptureStablePanel() {
             ref={textareaRef}
             value={content}
             onChange={(event) => handleContentChange(event.target.value)}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
             autoFocus
             disabled={saving || savedClosing}
             spellCheck={false}
@@ -755,7 +748,7 @@ function QuickCaptureStablePanel() {
           />
           <footer className="quick-capture-panel-footer">
             <div className={`quick-capture-status ${messageTone === "error" ? "quick-capture-status-error" : ""}`} role="status" aria-live="polite">
-              {message || runtimeHint || (detached ? "已固定在当前位置。Esc 或归位会回到顶部。" : "离开会自动收起，草稿会保留。Ctrl + Enter 留下。")}
+              {message || runtimeHint || (detached ? "已固定在当前位置。Esc 或归位会回到顶部。" : "离开会自动收起，草稿会保留。Enter 留下，Shift + Enter 换行。")}
             </div>
             <button className="quick-capture-primary" type="button" disabled={!content.trim() || saving || savedClosing} onClick={() => void save()}>
           {saving ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}

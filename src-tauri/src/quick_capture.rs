@@ -15,7 +15,7 @@ use windows_sys::Win32::{
     Foundation::{LPARAM, LRESULT, POINT, WPARAM},
     System::LibraryLoader::GetModuleHandleW,
     UI::{
-        Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE},
+        Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON},
         WindowsAndMessaging::{
             CallNextHookEx, DispatchMessageW, GetCursorPos, GetMessageW, KBDLLHOOKSTRUCT, MSG,
             SetWindowsHookExW, TranslateMessage, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
@@ -29,15 +29,17 @@ const QUICK_CAPTURE_HOT_WIDTH: u32 = 560;
 const QUICK_CAPTURE_HOT_HEIGHT: u32 = 10;
 const QUICK_CAPTURE_PANEL_WIDTH: u32 = 760;
 const QUICK_CAPTURE_PANEL_HEIGHT: u32 = 260;
+const QUICK_CAPTURE_EDGE_MARGIN: f64 = 24.0;
+const QUICK_CAPTURE_DETACHED_TOP_THRESHOLD: f64 = 48.0;
 const QUICK_CAPTURE_READY_TIMEOUT_MS: u64 = 1_500;
 const QUICK_CAPTURE_MAX_OPEN_FAILURES: u8 = 2;
 const HOTZONE_HOVER_DELAY_MS: u64 = 240;
 const QUICK_CAPTURE_HOTZONE_POLL_INTERVAL_MS: u64 = 80;
 const QUICK_CAPTURE_ESCAPE_FALLBACK_MS: u64 = 620;
-const QUICK_CAPTURE_HOTZONE_REOPEN_COOLDOWN_MS: u64 = 900;
 
 static QUICK_CAPTURE_PAUSED: OnceLock<Mutex<bool>> = OnceLock::new();
 static QUICK_CAPTURE_MONITOR: OnceLock<Mutex<Option<QuickCaptureMonitor>>> = OnceLock::new();
+static QUICK_CAPTURE_ANCHOR: OnceLock<Mutex<QuickCaptureAnchor>> = OnceLock::new();
 static QUICK_CAPTURE_STATE: OnceLock<Mutex<QuickCaptureState>> = OnceLock::new();
 static QUICK_CAPTURE_READY_WINDOWS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static QUICK_CAPTURE_PANEL_FAILURES: OnceLock<Mutex<u8>> = OnceLock::new();
@@ -51,7 +53,7 @@ static QUICK_CAPTURE_PANEL_SAVING_TOKEN: OnceLock<Mutex<Option<u64>>> = OnceLock
 static QUICK_CAPTURE_HOTZONE_OPEN_TOKEN: OnceLock<Mutex<u64>> = OnceLock::new();
 static QUICK_CAPTURE_HOTZONE_READY_TOKEN: OnceLock<Mutex<u64>> = OnceLock::new();
 static QUICK_CAPTURE_HOTZONE_WATCHING: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
-static QUICK_CAPTURE_HOTZONE_SUPPRESSED_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+static QUICK_CAPTURE_HOTZONE_REOPEN_BLOCKED: OnceLock<Mutex<bool>> = OnceLock::new();
 static QUICK_CAPTURE_PANEL_OPENING: OnceLock<Mutex<bool>> = OnceLock::new();
 static QUICK_CAPTURE_PANEL_RECOVERING: OnceLock<Mutex<bool>> = OnceLock::new();
 static QUICK_CAPTURE_PANEL_RECOVERING_SINCE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
@@ -81,10 +83,28 @@ pub(crate) enum QuickCaptureState {
     Degraded,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuickCaptureAnchor {
+    Left,
+    Center,
+    Right,
+}
+
+impl QuickCaptureAnchor {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Center => "center",
+            Self::Right => "right",
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct QuickCaptureRuntimeState {
     state: &'static str,
+    anchor: &'static str,
     panel_token: u64,
     hotzone_token: u64,
     paused: bool,
@@ -94,6 +114,16 @@ pub(crate) struct QuickCaptureRuntimeState {
     shortcut_error: Option<String>,
     escape_available: bool,
     escape_error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QuickCaptureDragResult {
+    applied: bool,
+    still_dragging: bool,
+    detached: bool,
+    anchor: &'static str,
+    pointer_outside: bool,
 }
 
 struct QuickCapturePanelOpenGuard;
@@ -584,29 +614,26 @@ fn hotzone_watch_running_store() -> &'static Mutex<Option<u64>> {
     QUICK_CAPTURE_HOTZONE_WATCHING.get_or_init(|| Mutex::new(None))
 }
 
-fn hotzone_suppressed_until_store() -> &'static Mutex<Option<Instant>> {
-    QUICK_CAPTURE_HOTZONE_SUPPRESSED_UNTIL.get_or_init(|| Mutex::new(None))
+fn hotzone_reopen_blocked_store() -> &'static Mutex<bool> {
+    QUICK_CAPTURE_HOTZONE_REOPEN_BLOCKED.get_or_init(|| Mutex::new(false))
 }
 
 fn suppress_quick_capture_hotzone_reopen() {
-    *hotzone_suppressed_until_store()
+    *hotzone_reopen_blocked_store()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-        Some(Instant::now() + Duration::from_millis(QUICK_CAPTURE_HOTZONE_REOPEN_COOLDOWN_MS));
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
 }
 
 fn quick_capture_hotzone_reopen_suppressed() -> bool {
-    let mut suppressed_until = hotzone_suppressed_until_store()
+    *hotzone_reopen_blocked_store()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match *suppressed_until {
-        Some(until) if Instant::now() < until => true,
-        Some(_) => {
-            *suppressed_until = None;
-            false
-        }
-        None => false,
-    }
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn clear_quick_capture_hotzone_reopen_suppression() {
+    *hotzone_reopen_blocked_store()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = false;
 }
 
 fn panel_soft_retries_store() -> &'static Mutex<BTreeMap<u64, u8>> {
@@ -858,6 +885,46 @@ fn quick_capture_monitor_store() -> &'static Mutex<Option<QuickCaptureMonitor>> 
     QUICK_CAPTURE_MONITOR.get_or_init(|| Mutex::new(None))
 }
 
+fn quick_capture_anchor_store() -> &'static Mutex<QuickCaptureAnchor> {
+    QUICK_CAPTURE_ANCHOR.get_or_init(|| Mutex::new(QuickCaptureAnchor::Center))
+}
+
+fn quick_capture_anchor() -> QuickCaptureAnchor {
+    *quick_capture_anchor_store()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn set_quick_capture_anchor(anchor: QuickCaptureAnchor) {
+    *quick_capture_anchor_store()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = anchor;
+}
+
+fn anchored_x(monitor_x: f64, monitor_width: f64, window_width: f64, anchor: QuickCaptureAnchor, edge_margin: f64) -> f64 {
+    let available = (monitor_width - window_width).max(0.0);
+    match anchor {
+        QuickCaptureAnchor::Left => monitor_x + edge_margin.min(available),
+        QuickCaptureAnchor::Center => monitor_x + available / 2.0,
+        QuickCaptureAnchor::Right => monitor_x + (available - edge_margin).max(0.0),
+    }
+}
+
+fn anchor_for_panel_center(monitor_x: f64, monitor_width: f64, panel_center_x: f64) -> QuickCaptureAnchor {
+    let relative_x = panel_center_x - monitor_x;
+    if relative_x < monitor_width / 3.0 {
+        QuickCaptureAnchor::Left
+    } else if relative_x >= monitor_width * 2.0 / 3.0 {
+        QuickCaptureAnchor::Right
+    } else {
+        QuickCaptureAnchor::Center
+    }
+}
+
+fn is_panel_detached(window_y: f64, monitor_y: f64, scale_factor: f64) -> bool {
+    window_y - monitor_y > QUICK_CAPTURE_DETACHED_TOP_THRESHOLD * scale_factor.max(1.0)
+}
+
 fn remember_quick_capture_monitor(app: &AppHandle) -> Result<(), String> {
     let monitor = if let Ok(main) = main_window(app) {
         main
@@ -889,10 +956,6 @@ pub(crate) fn remember_primary_quick_capture_monitor(app: &AppHandle) -> Result<
 }
 
 fn quick_capture_geometry(app: &AppHandle, width: u32, height: u32) -> Result<(LogicalPosition<f64>, LogicalSize<f64>), String> {
-    if remember_quick_capture_monitor(app).is_err() {
-        remember_primary_quick_capture_monitor(app)?;
-    }
-
     let mut stored_monitor = *quick_capture_monitor_store()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -907,7 +970,13 @@ fn quick_capture_geometry(app: &AppHandle, width: u32, height: u32) -> Result<(L
     }
 
     let monitor = stored_monitor.ok_or_else(|| "Unable to read monitor information.".to_string())?;
-    let x = monitor.logical_x + ((monitor.logical_width - width as f64).max(0.0) / 2.0);
+    let x = anchored_x(
+        monitor.logical_x,
+        monitor.logical_width,
+        width as f64,
+        quick_capture_anchor(),
+        QUICK_CAPTURE_EDGE_MARGIN,
+    );
     let y = monitor.logical_y;
 
     Ok((LogicalPosition::new(x, y), LogicalSize::new(width as f64, height as f64)))
@@ -1082,7 +1151,11 @@ pub(crate) fn quick_capture_panel_should_be_preserved(app: &AppHandle) -> bool {
 }
 
 fn panel_token_is_current(token: Option<u64>) -> bool {
-    matches!(token, Some(value) if value != 0 && value == current_panel_open_token())
+    panel_token_matches(token, current_panel_open_token())
+}
+
+fn panel_token_matches(token: Option<u64>, current_token: u64) -> bool {
+    matches!(token, Some(value) if value != 0 && value == current_token)
 }
 
 pub(crate) fn current_panel_token_option() -> Option<u64> {
@@ -1216,7 +1289,14 @@ fn cursor_in_quick_capture_hotzone(app: &AppHandle) -> bool {
 
     let hot_width = QUICK_CAPTURE_HOT_WIDTH as f64 * monitor.scale_factor;
     let hot_height = (QUICK_CAPTURE_HOT_HEIGHT as f64).max(14.0) * monitor.scale_factor;
-    let left = (monitor.physical_x + ((monitor.physical_width - hot_width).max(0.0) / 2.0)).round() as i32;
+    let left = anchored_x(
+        monitor.physical_x,
+        monitor.physical_width,
+        hot_width,
+        quick_capture_anchor(),
+        QUICK_CAPTURE_EDGE_MARGIN * monitor.scale_factor,
+    )
+    .round() as i32;
     let top = monitor.physical_y.round() as i32;
     let right = left.saturating_add(hot_width.round() as i32);
     let bottom = top.saturating_add(hot_height.round() as i32);
@@ -1243,6 +1323,9 @@ fn schedule_hotzone_cursor_watch(app: AppHandle, token: u64) {
             }
 
             if quick_capture_hotzone_reopen_suppressed() {
+                if !cursor_in_quick_capture_hotzone(&app) {
+                    clear_quick_capture_hotzone_reopen_suppression();
+                }
                 inside_since = None;
                 thread::sleep(Duration::from_millis(QUICK_CAPTURE_HOTZONE_POLL_INTERVAL_MS));
                 continue;
@@ -1280,6 +1363,38 @@ fn schedule_hotzone_cursor_watch(app: AppHandle, token: u64) {
 
 #[cfg(not(target_os = "windows"))]
 fn schedule_hotzone_cursor_watch(_app: AppHandle, _token: u64) {}
+
+#[cfg(target_os = "windows")]
+fn cursor_in_quick_capture_window(window: &WebviewWindow) -> bool {
+    let Ok(position) = window.outer_position() else {
+        return false;
+    };
+    let Ok(size) = window.outer_size() else {
+        return false;
+    };
+    let mut cursor = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut cursor) } == 0 {
+        return false;
+    }
+    let right = position.x.saturating_add(size.width.min(i32::MAX as u32) as i32);
+    let bottom = position.y.saturating_add(size.height.min(i32::MAX as u32) as i32);
+    cursor.x >= position.x && cursor.x < right && cursor.y >= position.y && cursor.y < bottom
+}
+
+#[cfg(target_os = "windows")]
+fn quick_capture_primary_pointer_down() -> bool {
+    unsafe { (GetAsyncKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0 }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn cursor_in_quick_capture_window(_window: &WebviewWindow) -> bool {
+    false
+}
+
+#[cfg(not(target_os = "windows"))]
+fn quick_capture_primary_pointer_down() -> bool {
+    false
+}
 
 fn quick_capture_window_visible(app: &AppHandle, label: &str) -> bool {
     app.get_webview_window(label)
@@ -1583,7 +1698,6 @@ pub(crate) fn show_quick_capture_hotzone_impl_with(app: &AppHandle, force_hidden
 
     hide_legacy_panel_window(app);
     hide_quick_capture_window(app, QUICK_CAPTURE_HOTZONE_LABEL);
-    remember_quick_capture_monitor(app).ok();
     let hotzone_token = next_hotzone_open_token();
     clear_quick_capture_ready_state(QUICK_CAPTURE_HOTZONE_LABEL);
     if current_hotzone_open_token() != hotzone_token
@@ -1966,13 +2080,12 @@ fn sync_quick_capture_lifecycle_on_main(app: &AppHandle) {
 
         if minimized {
             remember_quick_capture_monitor(&app_handle).ok();
-            let _ = main.hide();
-            if !panel_active
-                && !panel_visible
-                && !panel_transitioning
-                && !hotzone_visible
-            {
-                let _ = show_quick_capture_hotzone_for_hidden_main_impl(&app_handle);
+            if !panel_active && !panel_visible && !panel_transitioning {
+                if hotzone_visible {
+                    set_quick_capture_state(QuickCaptureState::HotzoneVisible);
+                } else {
+                    let _ = show_quick_capture_hotzone_for_hidden_main_impl(&app_handle);
+                }
             }
             return;
         }
@@ -2173,6 +2286,7 @@ pub(crate) fn get_quick_capture_panel_token(window: WebviewWindow) -> Result<u64
 pub(crate) fn get_quick_capture_runtime_state() -> QuickCaptureRuntimeState {
     QuickCaptureRuntimeState {
         state: quick_capture_state().as_str(),
+        anchor: quick_capture_anchor().as_str(),
         panel_token: current_panel_open_token(),
         hotzone_token: current_hotzone_open_token(),
         paused: quick_capture_paused(),
@@ -2186,23 +2300,93 @@ pub(crate) fn get_quick_capture_runtime_state() -> QuickCaptureRuntimeState {
 }
 
 #[tauri::command]
-pub(crate) fn set_quick_capture_detached(window: WebviewWindow, detached: bool, token: Option<u64>) -> Result<(), String> {
-    if window.label() != QUICK_CAPTURE_PANEL_LABEL {
-        return Ok(());
+pub(crate) fn finalize_quick_capture_drag(
+    window: WebviewWindow,
+    app: AppHandle,
+    token: Option<u64>,
+) -> Result<QuickCaptureDragResult, String> {
+    ensure_quick_capture_panel_window(&window)?;
+    if !panel_token_is_current(token) || !quick_capture_panel_is_active() {
+        return Ok(QuickCaptureDragResult {
+            applied: false,
+            still_dragging: false,
+            detached: quick_capture_state() == QuickCaptureState::PanelDetached,
+            anchor: quick_capture_anchor().as_str(),
+            pointer_outside: false,
+        });
     }
-    match token {
-        Some(value) if value != 0 && value == current_panel_open_token() => {}
-        _ => return Ok(()),
+
+    if quick_capture_primary_pointer_down() {
+        return Ok(QuickCaptureDragResult {
+            applied: false,
+            still_dragging: true,
+            detached: quick_capture_state() == QuickCaptureState::PanelDetached,
+            anchor: quick_capture_anchor().as_str(),
+            pointer_outside: false,
+        });
     }
-    if !quick_capture_panel_is_active() {
-        return Ok(());
-    }
-    set_quick_capture_state(if detached {
-        QuickCaptureState::PanelDetached
+
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .or(app.primary_monitor().map_err(|error| error.to_string())?)
+        .ok_or_else(|| "无法读取显示器信息".to_string())?;
+    let monitor_data = QuickCaptureMonitor::from_monitor(&monitor);
+    *quick_capture_monitor_store()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(monitor_data);
+
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let size = window.outer_size().map_err(|error| error.to_string())?;
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let detached = is_panel_detached(
+        position.y as f64,
+        monitor_position.y as f64,
+        monitor.scale_factor(),
+    );
+
+    if detached {
+        set_quick_capture_state(QuickCaptureState::PanelDetached);
     } else {
-        QuickCaptureState::PanelOpen
-    });
-    Ok(())
+        let panel_center_x = position.x as f64 + size.width as f64 / 2.0;
+        let anchor = anchor_for_panel_center(
+            monitor_position.x as f64,
+            monitor_size.width as f64,
+            panel_center_x,
+        );
+        set_quick_capture_anchor(anchor);
+        set_quick_capture_state(QuickCaptureState::PanelOpen);
+        let (anchored_position, anchored_size) =
+            quick_capture_geometry(&app, QUICK_CAPTURE_PANEL_WIDTH, QUICK_CAPTURE_PANEL_HEIGHT)?;
+        window.set_size(anchored_size).map_err(|error| error.to_string())?;
+        window.set_position(anchored_position).map_err(|error| error.to_string())?;
+    }
+
+    Ok(QuickCaptureDragResult {
+        applied: true,
+        still_dragging: false,
+        detached,
+        anchor: quick_capture_anchor().as_str(),
+        pointer_outside: !cursor_in_quick_capture_window(&window),
+    })
+}
+
+#[tauri::command]
+pub(crate) fn collapse_quick_capture_if_pointer_outside(
+    window: WebviewWindow,
+    app: AppHandle,
+    token: Option<u64>,
+) -> Result<bool, String> {
+    ensure_quick_capture_panel_window(&window)?;
+    if !panel_token_is_current(token)
+        || quick_capture_state() != QuickCaptureState::PanelOpen
+        || current_panel_is_saving()
+        || cursor_in_quick_capture_window(&window)
+    {
+        return Ok(false);
+    }
+    hide_quick_capture_panel_impl(&app, token)
 }
 
 #[tauri::command]
@@ -2299,4 +2483,49 @@ pub(crate) fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error:
 
     tray.build(app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        anchor_for_panel_center, anchored_x, is_panel_detached, panel_token_matches,
+        QuickCaptureAnchor,
+    };
+
+    #[test]
+    fn anchored_positions_use_stable_edge_margins() {
+        assert_eq!(anchored_x(0.0, 1_920.0, 760.0, QuickCaptureAnchor::Left, 24.0), 24.0);
+        assert_eq!(anchored_x(0.0, 1_920.0, 760.0, QuickCaptureAnchor::Center, 24.0), 580.0);
+        assert_eq!(anchored_x(0.0, 1_920.0, 760.0, QuickCaptureAnchor::Right, 24.0), 1_136.0);
+    }
+
+    #[test]
+    fn anchored_positions_do_not_overflow_small_monitors() {
+        for anchor in [QuickCaptureAnchor::Left, QuickCaptureAnchor::Center, QuickCaptureAnchor::Right] {
+            assert_eq!(anchored_x(120.0, 600.0, 760.0, anchor, 24.0), 120.0);
+        }
+    }
+
+    #[test]
+    fn panel_center_selects_left_center_and_right_thirds() {
+        assert_eq!(anchor_for_panel_center(0.0, 1_920.0, 300.0), QuickCaptureAnchor::Left);
+        assert_eq!(anchor_for_panel_center(0.0, 1_920.0, 960.0), QuickCaptureAnchor::Center);
+        assert_eq!(anchor_for_panel_center(0.0, 1_920.0, 1_700.0), QuickCaptureAnchor::Right);
+    }
+
+    #[test]
+    fn detached_threshold_scales_with_monitor() {
+        assert!(!is_panel_detached(48.0, 0.0, 1.0));
+        assert!(is_panel_detached(49.0, 0.0, 1.0));
+        assert!(!is_panel_detached(72.0, 0.0, 1.5));
+        assert!(is_panel_detached(73.0, 0.0, 1.5));
+    }
+
+    #[test]
+    fn stale_and_empty_panel_tokens_are_rejected() {
+        assert!(panel_token_matches(Some(8), 8));
+        assert!(!panel_token_matches(Some(7), 8));
+        assert!(!panel_token_matches(Some(0), 0));
+        assert!(!panel_token_matches(None, 8));
+    }
 }

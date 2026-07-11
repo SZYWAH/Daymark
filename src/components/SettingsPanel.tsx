@@ -16,6 +16,7 @@ import {
   Upload,
   X,
   XCircle,
+  Library,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { getEffectiveAiSettings, getProviderLabel, hasEnvApiKey, testAiConnection } from "../ai/deepseek";
@@ -38,6 +39,7 @@ import { PageWorkspace } from "./PageWorkspace";
 import { ResultRow, ScrollableResultPanel } from "./ResultPanels";
 import { SelectMenu } from "./SelectMenu";
 import type { AiSettings, AutoWorkReviewSettings, ConversationSourceKind, ConversationSourceProbe } from "../types";
+import type { DemoLibraryState } from "../data/demoLibrary";
 
 type SettingsPanelProps = {
   settings: AiSettings;
@@ -49,6 +51,9 @@ type SettingsPanelProps = {
   onDirtyChange?: (dirty: boolean) => void;
   onRestoreCoreBackup: (backup: DaymarkCoreBackupV1) => Promise<DaymarkCoreBackupCounts | null>;
   onOpenOnboarding: () => void;
+  demoLibraryState: DemoLibraryState;
+  onInstallDemoLibrary: () => Promise<void>;
+  onRemoveDemoLibrary: () => void;
 };
 
 function normalizeSettingsForDirty(settings: AiSettings) {
@@ -83,6 +88,9 @@ export function SettingsPanel({
   onDirtyChange,
   onRestoreCoreBackup,
   onOpenOnboarding,
+  demoLibraryState,
+  onInstallDemoLibrary,
+  onRemoveDemoLibrary,
 }: SettingsPanelProps) {
   const [draft, setDraft] = useState(settings);
   const [saving, setSaving] = useState(false);
@@ -717,7 +725,12 @@ export function SettingsPanel({
         </div>
           </div>
           <aside className="space-y-5 pr-1 xl:min-h-0 xl:overflow-y-auto xl:scrollbar-thin">
-            <UsageHelp onOpenOnboarding={onOpenOnboarding} />
+            <UsageHelp
+              demoLibraryState={demoLibraryState}
+              onInstallDemoLibrary={onInstallDemoLibrary}
+              onOpenOnboarding={onOpenOnboarding}
+              onRemoveDemoLibrary={onRemoveDemoLibrary}
+            />
             <BuildInfo />
             <CodexProbePanel />
           </aside>
@@ -756,7 +769,26 @@ function downloadTextFile(fileName: string, contents: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-function UsageHelp({ onOpenOnboarding }: { onOpenOnboarding: () => void }) {
+function UsageHelp({
+  demoLibraryState,
+  onInstallDemoLibrary,
+  onOpenOnboarding,
+  onRemoveDemoLibrary,
+}: {
+  demoLibraryState: DemoLibraryState;
+  onInstallDemoLibrary: () => Promise<void>;
+  onOpenOnboarding: () => void;
+  onRemoveDemoLibrary: () => void;
+}) {
+  const [demoBusy, setDemoBusy] = useState(false);
+  const install = async () => {
+    setDemoBusy(true);
+    try {
+      await onInstallDemoLibrary();
+    } finally {
+      setDemoBusy(false);
+    }
+  };
   return (
     <section className="section-surface space-y-3 p-5">
       <div>
@@ -768,6 +800,19 @@ function UsageHelp({ onOpenOnboarding }: { onOpenOnboarding: () => void }) {
         <CircleHelp size={15} />
         重新查看使用引导
       </button>
+      <div className="border-t border-line pt-3">
+        <p className="text-xs leading-5 text-ink/48">
+          示例资料：{demoLibraryState.installed ? `${demoLibraryState.itemCount} 条资料` : "未安装"}
+        </p>
+        <button
+          className="secondary-action action-standard mt-2 text-xs"
+          disabled={demoBusy}
+          onClick={demoLibraryState.installed ? onRemoveDemoLibrary : () => void install()}
+        >
+          <Library size={15} />
+          {demoBusy ? "正在安装…" : demoLibraryState.installed ? "删除示例资料" : "安装示例资料"}
+        </button>
+      </div>
     </section>
   );
 }

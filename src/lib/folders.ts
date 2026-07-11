@@ -46,6 +46,27 @@ export function getFolderAndDescendantIds(folders: FolderNode[], folderId: strin
   return Array.from(ids);
 }
 
+export function getFolderAggregateItemCounts(
+  folders: FolderNode[],
+  items: ReadonlyArray<{ folderId?: string }>,
+) {
+  const parentById = new Map(folders.map((folder) => [folder.id, folder.parentId]));
+  const counts = new Map(folders.map((folder) => [folder.id, 0]));
+
+  for (const item of items) {
+    let folderId = item.folderId;
+    const visited = new Set<string>();
+
+    while (folderId && parentById.has(folderId) && !visited.has(folderId)) {
+      visited.add(folderId);
+      counts.set(folderId, (counts.get(folderId) ?? 0) + 1);
+      folderId = parentById.get(folderId);
+    }
+  }
+
+  return counts;
+}
+
 export function flattenFolderOptions(folders: FolderNode[]) {
   const options: FolderOption[] = [{ label: "未归档", depth: 0 }];
 

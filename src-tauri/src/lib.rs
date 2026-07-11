@@ -260,9 +260,9 @@ pub fn run() {
                         let _ = hide_main(window.app_handle());
                     }
                     WindowEvent::Resized(_) => {
-                        if window.is_minimized().unwrap_or(false) {
-                            let _ = hide_main(window.app_handle());
-                        } else if main_is_available_for_hotzone(window.app_handle()) {
+                        if !window.is_minimized().unwrap_or(false)
+                            && main_is_available_for_hotzone(window.app_handle())
+                        {
                             if quick_capture_panel_should_be_preserved(window.app_handle()) {
                                 hide_quick_capture_window(
                                     window.app_handle(),
@@ -373,7 +373,8 @@ pub fn run() {
             quick_capture::quick_capture_window_ready,
             quick_capture::get_quick_capture_panel_token,
             quick_capture::get_quick_capture_runtime_state,
-            quick_capture::set_quick_capture_detached,
+            quick_capture::finalize_quick_capture_drag,
+            quick_capture::collapse_quick_capture_if_pointer_outside,
             quick_capture::set_quick_capture_saving,
             quick_capture::notify_quick_capture_saved
         ])
