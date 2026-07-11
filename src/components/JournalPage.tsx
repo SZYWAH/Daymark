@@ -1284,7 +1284,7 @@ function DailySummaryBlock({ report, highlighted = false, stale = false }: { rep
   return (
     <section
       id={`daily-summary-${report.id}`}
-      className={`border-b border-line bg-panel/45 px-4 py-3 ${highlighted ? "ring-1 ring-copper/35" : ""}`}
+      className={`border-b border-line bg-panel/45 px-4 py-3 ${highlighted ? "ring-1 ring-accent/35" : ""}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
@@ -1593,7 +1593,7 @@ function JournalCalendar({
               key={dateKey}
               className={`relative flex h-8 items-center justify-center rounded-[8px] text-xs transition ${
                 isSelected
-                  ? "bg-copper/20 font-semibold text-copper ring-1 ring-copper/25"
+                  ? "bg-accent/20 font-semibold text-accent ring-1 ring-accent/25"
                   : isToday
                     ? "bg-lake/10 font-semibold text-lake"
                     : isCurrentMonth
@@ -1613,7 +1613,7 @@ function JournalCalendar({
               {count > 0 && (
                 <span
                   className={`absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full ${
-                    isSelected ? "bg-copper" : "bg-copper"
+                    isSelected ? "bg-accent" : "bg-accent"
                   }`}
                 />
               )}

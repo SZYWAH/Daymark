@@ -1,33 +1,9 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Layers3, Minus, Square, X } from "lucide-react";
-import { useEffect, useState } from "react";
 import { isDesktopRuntime } from "../lib/desktop";
 
-export function MainWindowTitleBar() {
+export function MainWindowTitleBar({ maximized }: { maximized: boolean }) {
   const desktop = isDesktopRuntime();
-  const [maximized, setMaximized] = useState(false);
-
-  useEffect(() => {
-    if (!desktop) return undefined;
-
-    const appWindow = getCurrentWindow();
-    let active = true;
-
-    const syncMaximizedState = async () => {
-      const next = await appWindow.isMaximized().catch(() => false);
-      if (active) setMaximized(next);
-    };
-
-    void syncMaximizedState();
-    const unlistenPromise = appWindow.onResized(() => {
-      void syncMaximizedState();
-    });
-
-    return () => {
-      active = false;
-      void unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, [desktop]);
 
   if (!desktop) return null;
 

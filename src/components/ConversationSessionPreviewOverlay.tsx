@@ -165,7 +165,7 @@ export function ConversationSessionPreviewOverlay({
           bodyClassName="flex flex-col gap-3"
         >
           {message && <div className="shrink-0 rounded-[8px] border border-line bg-panel p-3 text-xs leading-5 text-anywhere text-ink/70">{message}</div>}
-          <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface p-4 text-anywhere text-xs leading-6 text-ink/66 scrollbar-thin">
+          <pre className="conversation-code-surface min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface p-4 text-anywhere text-xs leading-6 text-ink/66 scrollbar-thin">
             {previewText || "还没有打开任何会话正文。"}
           </pre>
         </ScrollableResultPanel>

@@ -875,7 +875,7 @@ function TodayReviewPanel({
             {message && <div>{message}</div>}
             {cancelledDraft && !progress && <div>有一份取消后保留的临时草稿，可到记忆页继续处理。</div>}
             {progress?.partialContent && (
-              <pre className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface p-2 text-anywhere text-[11px] leading-5 text-ink/60 scrollbar-thin">
+              <pre className="conversation-code-surface mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface p-2 text-anywhere text-[11px] leading-5 text-ink/60 scrollbar-thin">
                 {progress.partialContent}
               </pre>
             )}

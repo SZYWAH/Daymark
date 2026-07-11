@@ -41,7 +41,7 @@ export function LibrarySmartToolbar({
             key={view.id}
             className={`flex h-7 shrink-0 items-center gap-1.5 border-b text-xs transition ${
               active
-                ? "border-copper text-ink"
+                ? "border-accent text-ink"
                 : "border-transparent text-ink/58 hover:border-line hover:text-ink"
             }`}
             onClick={() => onSelectView(view.id)}

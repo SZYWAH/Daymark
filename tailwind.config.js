@@ -13,6 +13,8 @@ export default {
         moss: "rgb(var(--color-moss) / <alpha-value>)",
         copper: "rgb(var(--color-copper) / <alpha-value>)",
         lake: "rgb(var(--color-lake) / <alpha-value>)",
+        accent: "rgb(var(--color-accent) / <alpha-value>)",
+        focus: "rgb(var(--color-focus) / <alpha-value>)",
       },
       boxShadow: {
         soft: "var(--shadow-soft)",

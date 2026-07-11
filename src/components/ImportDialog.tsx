@@ -312,7 +312,7 @@ export function ImportDialog({
                 <button
                   key={item.id}
                   className={`flex h-10 items-center justify-center gap-2 rounded-[8px] border text-sm transition ${
-                    active ? "border-copper/40 bg-copper/10 text-copper shadow-sm" : "border-line bg-surface text-ink/62 hover:border-copper/35 hover:bg-copper/10 hover:text-copper"
+                    active ? "border-accent/40 bg-accent/10 text-accent shadow-sm" : "border-line bg-surface text-ink/62 hover:border-accent/35 hover:bg-accent/10 hover:text-accent"
                   }`}
                   disabled={saving}
                   onClick={() => handleModeChange(item.id)}

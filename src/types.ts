@@ -5,6 +5,7 @@ export const READING_STATUSES = ["不需要", "待阅读", "阅读中", "已阅�
 export const MEMORY_STATUSES = ["candidate", "active", "archived", "ignored"] as const;
 export const MEMORY_PATCH_STATUSES = ["pending", "applied", "ignored"] as const;
 export const THEME_MODES = ["dark", "light", "system"] as const;
+export const THEME_PALETTES = ["daymark", "graphite", "mist", "ink", "clay", "fir"] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];
 export type LegacyItemStatus = (typeof LEGACY_ITEM_STATUSES)[number];
@@ -13,6 +14,7 @@ export type ReadingStatus = (typeof READING_STATUSES)[number];
 export type MemoryStatus = (typeof MEMORY_STATUSES)[number];
 export type MemoryPatchStatus = (typeof MEMORY_PATCH_STATUSES)[number];
 export type ThemeMode = (typeof THEME_MODES)[number];
+export type ThemePalette = (typeof THEME_PALETTES)[number];
 
 export type Item = {
   id: string;

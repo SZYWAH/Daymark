@@ -144,7 +144,7 @@ export function ItemList({
                 key={status}
                 className={`shrink-0 border-b py-1 text-center text-xs font-medium transition ${
                   statusFilter === status
-                    ? "border-copper text-ink"
+                    ? "border-accent text-ink"
                     : "border-transparent text-ink/50 hover:border-line hover:text-ink"
                 }`}
                 onClick={() => onStatusFilterChange(status)}
@@ -227,7 +227,7 @@ function ItemCard({
     <article
       role="button"
       tabIndex={0}
-      className={`item-card library-card group type-${item.type} block w-full cursor-pointer px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-copper/35 ${
+      className={`item-card library-card group type-${item.type} block w-full cursor-pointer px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 ${
         selected ? "selected-card" : ""
       }`}
       onClick={onClick}

@@ -86,7 +86,8 @@ import {
 import { loadAiSettingsWithSecrets, saveAiSettingsWithSecrets } from "./lib/aiSecrets";
 import { runAutoWorkReviewOnce } from "./lib/autoWorkReview";
 import { flattenFolderOptions, getFolderAndDescendantIds } from "./lib/folders";
-import { applyThemeMode, bindSystemThemeListener } from "./lib/theme";
+import { applyAppearancePreference, bindSystemThemeListener, getThemeMode } from "./lib/theme";
+import { useMainWindowMaximized } from "./hooks/useMainWindowMaximized";
 import { getSafeErrorMessage } from "./lib/redaction";
 import { markOnboardingCompleted, shouldShowOnboarding } from "./lib/onboarding";
 import { shouldOpenFirstRunGuide } from "./lib/startup";
@@ -543,6 +544,7 @@ function matchSmartView(item: Item, view: SmartView) {
 }
 
 export default function App() {
+  const mainWindowMaximized = useMainWindowMaximized();
   const [items, setItems] = useState<Item[]>([]);
   const [folders, setFolders] = useState<FolderNode[]>([]);
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
@@ -733,7 +735,7 @@ export default function App() {
         setAutoWorkReviewSettings(loadedAutoWorkReviewSettings);
         setRollingWorkReviews(loadedRollingWorkReviews);
         setRollingWorkReview(loadedRollingWorkReviews.find((review) => review.date === todayKey) ?? null);
-        applyThemeMode(loadedSettingsResult.settings.themeMode);
+        applyAppearancePreference();
         if (loadedSettingsResult.notice) setError(loadedSettingsResult.notice);
         setJournalEntries(loadedJournal);
         setSummaryReports(loadedReports);
@@ -764,9 +766,7 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    return bindSystemThemeListener(() => settings?.themeMode ?? "dark");
-  }, [settings?.themeMode]);
+  useEffect(() => bindSystemThemeListener(getThemeMode), []);
 
   useEffect(() => {
     summaryRunningRef.current = summaryRunning;
@@ -1467,7 +1467,7 @@ export default function App() {
   const handleSaveSettings = async (nextSettings: AiSettings) => {
     const saved = await saveAiSettingsWithSecrets(nextSettings);
     setSettings(saved);
-    applyThemeMode(saved.themeMode);
+    applyAppearancePreference();
   };
 
   const handleRestoreCoreBackup = async (backup: DaymarkCoreBackupV1) =>
@@ -2441,7 +2441,7 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <MainWindowTitleBar />
+      <MainWindowTitleBar maximized={mainWindowMaximized} />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar
           folders={folders}
@@ -2558,6 +2558,7 @@ export default function App() {
               initialReviewId={activeView.kind === "memory" ? activeView.reviewId : undefined}
               initialReviewDraftId={activeView.kind === "memory" ? activeView.reviewDraftId : undefined}
               initialSummaryId={activeView.kind === "memory" ? activeView.summaryId : undefined}
+              mainWindowMaximized={mainWindowMaximized}
               onUpdateMemory={handleUpdateMemory}
               onGenerateCodexReview={handleGenerateCodexReview}
               onGenerateCombinedReview={handleGenerateCombinedReview}
@@ -2903,7 +2904,7 @@ function MobileLibrarySwitcher({
             <button
               key={entry.id}
               className={`shrink-0 rounded-full border px-3 py-1.5 text-xs transition ${
-                active ? "border-copper bg-copper/12 text-ink" : "border-line/70 text-ink/56 hover:border-line hover:text-ink"
+                active ? "border-accent bg-accent/10 text-ink" : "border-line/70 text-ink/56 hover:border-line hover:text-ink"
               }`}
               type="button"
               onClick={() => onSelectView({ kind: "smart", id: entry.id })}
@@ -2921,7 +2922,7 @@ function MobileLibrarySwitcher({
             <button
               key={folderKey || "unfiled"}
               className={`shrink-0 rounded-full border px-3 py-1.5 text-xs transition ${
-                active ? "border-copper bg-copper/12 text-ink" : "border-line/70 text-ink/56 hover:border-line hover:text-ink"
+                active ? "border-accent bg-accent/10 text-ink" : "border-line/70 text-ink/56 hover:border-line hover:text-ink"
               }`}
               style={{ marginLeft: folder.depth ? Math.min(folder.depth, 2) * 8 : undefined }}
               type="button"

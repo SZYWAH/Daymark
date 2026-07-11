@@ -84,6 +84,7 @@ type MemoryPageProps = {
   initialReviewId?: string;
   initialReviewDraftId?: string;
   initialSummaryId?: string;
+  mainWindowMaximized: boolean;
   onUpdateMemory: (id: string, patch: Partial<MemoryCard>) => Promise<void>;
   onGenerateCodexReview: (
     input: CodexReviewInput,
@@ -128,6 +129,7 @@ export function MemoryPage({
   initialReviewId,
   initialReviewDraftId,
   initialSummaryId,
+  mainWindowMaximized,
   onUpdateMemory,
   onGenerateCodexReview,
   onGenerateCombinedReview,
@@ -226,8 +228,8 @@ export function MemoryPage({
           )}
 
           {subView === "ai-review" && (
-            <div className="grid h-full min-h-0 gap-4 overflow-y-auto xl:grid-cols-[minmax(0,1fr)_240px] xl:overflow-hidden">
-              <div className="min-h-0 overflow-y-auto pr-0 scrollbar-thin xl:pr-6">
+            <div className={`grid h-full min-h-0 gap-4 overflow-y-auto ${mainWindowMaximized ? "xl:grid-cols-[minmax(0,1fr)_240px] xl:overflow-hidden" : ""}`}>
+              <div className={`min-h-0 overflow-y-auto pr-0 scrollbar-thin ${mainWindowMaximized ? "xl:pr-6" : ""}`}>
                 <CodexReviewWorkbench
                   settings={settings}
                   reviews={codexReviews}
@@ -238,15 +240,17 @@ export function MemoryPage({
                   onSaveGenerationDraft={onSaveGenerationDraft}
                 />
               </div>
-              <div className="min-h-0 overflow-y-auto scrollbar-thin">
-                <MemoryReviewMetrics
-                  todayKey={todayKey}
-                  todayReviews={todayReviews.length}
-                  todayPatchCount={todayPatchCount}
-                  indexedSessions={codexSessionIndex.length}
-                  memoryDocument={memoryDocument}
-                />
-              </div>
+              {mainWindowMaximized ? (
+                <div className="min-h-0 overflow-y-auto scrollbar-thin">
+                  <MemoryReviewMetrics
+                    todayKey={todayKey}
+                    todayReviews={todayReviews.length}
+                    todayPatchCount={todayPatchCount}
+                    indexedSessions={codexSessionIndex.length}
+                    memoryDocument={memoryDocument}
+                  />
+                </div>
+              ) : null}
             </div>
           )}
 
@@ -300,7 +304,7 @@ function MemorySubViewNav({
             key={id}
             className={`flex h-8 shrink-0 items-center gap-2 border-b text-sm transition ${
               selected
-                ? "border-copper text-ink"
+                ? "border-accent text-ink"
                 : "border-transparent text-ink/55 hover:border-line hover:text-ink"
             }`}
             onClick={() => onChange(id)}
@@ -1215,7 +1219,7 @@ function CodexReviewWorkbench({
               )}
             </div>
             {previewMessage && <div className="mb-3 shrink-0 rounded-[8px] border border-line bg-surface p-3 text-xs leading-5 text-ink/70">{previewMessage}</div>}
-            <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface p-4 text-anywhere text-xs leading-6 text-ink/66 scrollbar-thin">
+            <pre className="conversation-code-surface min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface p-4 text-anywhere text-xs leading-6 text-ink/66 scrollbar-thin">
               {previewText || "还没有打开任何会话正文。"}
             </pre>
           </div>
@@ -1232,7 +1236,7 @@ function CodexReviewWorkbench({
             </div>
           )}
           {partialContent && (
-            <pre className="max-h-[220px] overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface px-3 py-2 text-anywhere text-xs leading-6 text-ink/62 scrollbar-thin">
+            <pre className="conversation-code-surface max-h-[220px] overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface px-3 py-2 text-anywhere text-xs leading-6 text-ink/62 scrollbar-thin">
               {partialContent}
             </pre>
           )}

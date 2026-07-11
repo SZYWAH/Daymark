@@ -148,7 +148,7 @@ export function DatePickerPopover({
                   type="button"
                   className={`relative flex h-8 items-center justify-center rounded-[8px] text-xs transition ${
                     isSelected
-                      ? "bg-copper/20 font-semibold text-copper ring-1 ring-copper/25"
+                      ? "bg-accent/20 font-semibold text-accent ring-1 ring-accent/25"
                       : isToday
                         ? "bg-lake/10 font-semibold text-lake"
                         : isCurrentMonth

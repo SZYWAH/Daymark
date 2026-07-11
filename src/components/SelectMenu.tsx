@@ -207,7 +207,7 @@ export function SelectMenu({
                 aria-selected={active}
                 className={`flex w-full items-start gap-2 rounded-[7px] px-2 py-2 text-left text-sm transition ${
                   active
-                    ? "bg-copper/10 text-copper"
+                    ? "bg-accent/10 text-accent"
                     : focused
                       ? "bg-panel text-ink"
                       : "text-ink/72 hover:bg-panel hover:text-ink"
@@ -241,7 +241,7 @@ export function SelectMenu({
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-activedescendant={activeOptionId}
-        className={`field-control flex w-full items-center justify-between gap-2 text-left shadow-sm hover:border-copper/35 hover:bg-copper/10 disabled:cursor-not-allowed disabled:opacity-60 ${triggerClassName || "field-prominent"}`}
+        className={`field-control flex w-full items-center justify-between gap-2 text-left shadow-sm hover:border-accent/35 hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-60 ${triggerClassName || "field-prominent"}`}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {

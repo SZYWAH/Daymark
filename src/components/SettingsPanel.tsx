@@ -4,15 +4,12 @@ import {
   CircleHelp,
   Database,
   Download,
-  Moon,
   FolderSearch,
   HardDrive,
   KeyRound,
   RefreshCw,
   Save,
   ShieldCheck,
-  Sun,
-  Monitor,
   Upload,
   X,
   XCircle,
@@ -34,12 +31,13 @@ import {
 } from "../data/itemStore";
 import { hasStoredAiApiKey } from "../lib/aiSecrets";
 import { getSafeErrorMessage } from "../lib/redaction";
-import { applyThemeMode } from "../lib/theme";
+import { saveThemeMode } from "../lib/theme";
 import { PageWorkspace } from "./PageWorkspace";
 import { ResultRow, ScrollableResultPanel } from "./ResultPanels";
 import { SelectMenu } from "./SelectMenu";
 import type { AiSettings, AutoWorkReviewSettings, ConversationSourceKind, ConversationSourceProbe } from "../types";
 import type { DemoLibraryState } from "../data/demoLibrary";
+import { AppearanceStyleSettings } from "./AppearanceStyleSettings";
 
 type SettingsPanelProps = {
   settings: AiSettings;
@@ -316,6 +314,44 @@ export function SettingsPanel({
     }
   };
 
+  const changeThemeMode = (mode: AiSettings["themeMode"]) => {
+    if (themeSavingRef.current || draft.themeMode === mode) return;
+    themeSavingRef.current = true;
+    setThemeSaving(true);
+    const requestSeq = themeSaveSeqRef.current + 1;
+    themeSaveSeqRef.current = requestSeq;
+    setDraft({ ...draft, themeMode: mode });
+    setMessage("");
+    saveThemeMode(mode);
+
+    if (hasNonThemeSettingsChanges(draft, settings)) {
+      themeSavingRef.current = false;
+      setThemeSaving(false);
+      setMessageType("info");
+      setMessage("外观已预览。当前页面还有未保存的 AI 配置，请点击“保存”后一起生效。");
+      return;
+    }
+
+    void onSave({ ...settings, themeMode: mode })
+      .then(() => {
+        if (themeSaveSeqRef.current !== requestSeq) return;
+        setMessageType("ok");
+        setMessage("外观模式已保存。");
+      })
+      .catch((error) => {
+        if (themeSaveSeqRef.current !== requestSeq) return;
+        setDraft(settings);
+        saveThemeMode(settings.themeMode);
+        setMessageType("error");
+        setMessage(getSafeErrorMessage(error, "外观模式保存失败。"));
+      })
+      .finally(() => {
+        if (themeSaveSeqRef.current !== requestSeq) return;
+        themeSavingRef.current = false;
+        setThemeSaving(false);
+      });
+  };
+
   return (
     <PageWorkspace
       eyebrow="Settings"
@@ -347,115 +383,51 @@ export function SettingsPanel({
       <div className="min-h-full px-5 pb-24 pt-5 lg:pb-5 xl:h-full xl:min-h-0 xl:overflow-hidden">
         <div className="mx-auto grid min-h-0 max-w-7xl gap-5 xl:h-full xl:grid-cols-[minmax(0,1fr)_380px]">
           <div className="space-y-5 pr-1 xl:min-h-0 xl:overflow-y-auto xl:scrollbar-thin">
-        <div className="section-surface space-y-4 p-5">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Theme</p>
-            <h3 className="mt-1 text-base font-semibold text-ink">界面主题</h3>
-            <p className="mt-1 text-sm leading-6 text-ink/52">暗色为默认书房场，浅色保留，系统模式会跟随 Windows 设置。</p>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {[
-              { mode: "dark" as const, label: "暗色", icon: Moon, text: "静场书房" },
-              { mode: "light" as const, label: "浅色", icon: Sun, text: "纸面工具" },
-              { mode: "system" as const, label: "跟随系统", icon: Monitor, text: "自动切换" },
-            ].map(({ mode, label, icon: Icon, text }) => {
-              const active = draft.themeMode === mode;
-              return (
-                <button
-                  key={mode}
-                  className={`flex items-center gap-3 rounded-[8px] border px-3 py-3 text-left transition ${
-                    active
-                      ? "border-copper/50 bg-copper/10 text-ink shadow-card"
-                      : "border-line bg-panel/70 text-ink/62 hover:border-copper/30 hover:bg-surface"
-                  }`}
-                  disabled={themeSaving || saving}
-                  onClick={() => {
-                    if (themeSavingRef.current || active) return;
-                    themeSavingRef.current = true;
-                    setThemeSaving(true);
-                    const requestSeq = themeSaveSeqRef.current + 1;
-                    themeSaveSeqRef.current = requestSeq;
-                    const nextDraft = { ...draft, themeMode: mode };
-                    setDraft(nextDraft);
-                    setMessage("");
-                    applyThemeMode(mode);
-                    if (hasNonThemeSettingsChanges(draft, settings)) {
-                      themeSavingRef.current = false;
-                      setThemeSaving(false);
-                      setMessageType("info");
-                      setMessage("主题已预览。当前页面还有未保存的 AI 配置，请点击“保存”后一起生效。");
-                      return;
-                    }
-                    void onSave({ ...settings, themeMode: mode })
-                      .then(() => {
-                        if (themeSaveSeqRef.current !== requestSeq) return;
-                        setMessageType("ok");
-                        setMessage("主题已保存。");
-                      })
-                      .catch((error) => {
-                        if (themeSaveSeqRef.current !== requestSeq) return;
-                        setDraft(settings);
-                        applyThemeMode(settings.themeMode);
-                        setMessageType("error");
-                        setMessage(getSafeErrorMessage(error, "主题保存失败。"));
-                      })
-                      .finally(() => {
-                        if (themeSaveSeqRef.current !== requestSeq) return;
-                        themeSavingRef.current = false;
-                        setThemeSaving(false);
-                      });
-                  }}
-                >
-                  <span className="flex h-9 w-9 items-center justify-center rounded-[8px] border border-line bg-surface text-copper">
-                    <Icon size={17} />
-                  </span>
-                  <span>
-                    <span className="block text-sm font-semibold">{label}</span>
-                    <span className="mt-0.5 block text-xs text-ink/45">{text}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <div>
+          <AppearanceStyleSettings
+            mode={draft.themeMode}
+            disabled={themeSaving || saving}
+            onModeChange={changeThemeMode}
+          />
 
-        <div className="section-surface space-y-4 p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Backup</p>
-              <h3 className="mt-1 text-base font-semibold text-ink">数据备份</h3>
-              <p className="mt-1 text-sm leading-6 text-ink/52">
-                导出资料、目录、日记、记忆和链接；不会导出 AI 设置、API Key、草稿或历史总结报告。
-              </p>
+          <div className="section-surface space-y-4 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Backup</p>
+                <h3 className="mt-1 text-base font-semibold text-ink">数据备份</h3>
+                <p className="mt-1 text-sm leading-6 text-ink/52">
+                  导出资料、目录、日记、记忆和链接；不会导出 AI 设置、API Key、草稿或历史总结报告。
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="secondary-action action-prominent text-xs"
+                  disabled={Boolean(backupBusy)}
+                  onClick={exportBackup}
+                >
+                  {backupBusy === "export" ? <RefreshCw size={16} className="animate-spin" /> : <Download size={16} />}
+                  {backupBusy === "export" ? "导出中" : "导出核心备份"}
+                </button>
+                <button
+                  className="secondary-action action-prominent text-xs"
+                  disabled={Boolean(backupBusy)}
+                  onClick={startRestoreBackup}
+                >
+                  {backupBusy === "restore" ? <RefreshCw size={16} className="animate-spin" /> : <Upload size={16} />}
+                  {backupBusy === "restore" ? "恢复中" : "恢复核心备份"}
+                </button>
+                <input
+                  ref={backupInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={handleBrowserBackupFileSelected}
+                />
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                className="secondary-action action-prominent text-xs"
-                disabled={Boolean(backupBusy)}
-                onClick={exportBackup}
-              >
-                {backupBusy === "export" ? <RefreshCw size={16} className="animate-spin" /> : <Download size={16} />}
-                {backupBusy === "export" ? "导出中" : "导出核心备份"}
-              </button>
-              <button
-                className="secondary-action action-prominent text-xs"
-                disabled={Boolean(backupBusy)}
-                onClick={startRestoreBackup}
-              >
-                {backupBusy === "restore" ? <RefreshCw size={16} className="animate-spin" /> : <Upload size={16} />}
-                {backupBusy === "restore" ? "恢复中" : "恢复核心备份"}
-              </button>
-              <input
-                ref={backupInputRef}
-                type="file"
-                accept="application/json,.json"
-                className="hidden"
-                onChange={handleBrowserBackupFileSelected}
-              />
+            <div className="rounded-[8px] border border-line bg-panel/70 p-3 text-xs leading-5 text-ink/52">
+              恢复会在确认后覆盖当前核心内容。主题、布局、AI 设置和手动 API Key 会保留在本机，不会被备份文件改写。
             </div>
-          </div>
-          <div className="rounded-[8px] border border-line bg-panel/70 p-3 text-xs leading-5 text-ink/52">
-            恢复会在确认后覆盖当前核心内容。主题、布局、AI 设置和手动 API Key 会保留在本机，不会被备份文件改写。
           </div>
         </div>
 
