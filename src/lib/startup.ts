@@ -1,4 +1,4 @@
-export const STARTUP_MIN_VISIBLE_MS = 600;
+export const STARTUP_MIN_VISIBLE_MS = 1_400;
 export const STARTUP_MAX_TOTAL_MS = 2_500;
 export const STARTUP_EXIT_MS = 180;
 

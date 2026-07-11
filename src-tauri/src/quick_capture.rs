@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUr
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
 
 use crate::ensure_main_window;
+use crate::main_window_state::main_window_startup_pending;
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
@@ -1664,6 +1665,12 @@ pub(crate) fn show_quick_capture_hotzone_for_hidden_main_impl(app: &AppHandle) -
 }
 
 pub(crate) fn show_quick_capture_hotzone_impl_with(app: &AppHandle, force_hidden_main: bool) -> Result<(), String> {
+    if main_window_startup_pending() {
+        set_quick_capture_state(QuickCaptureState::MainVisible);
+        hide_quick_capture_windows(app);
+        return Ok(());
+    }
+
     if current_panel_is_saving() && quick_capture_window_visible(app, QUICK_CAPTURE_PANEL_LABEL) {
         return Ok(());
     }
@@ -1759,6 +1766,12 @@ pub(crate) fn show_quick_capture_hotzone_impl_with(app: &AppHandle, force_hidden
 }
 
 pub(crate) fn show_quick_capture_panel_impl(app: &AppHandle) -> Result<(), String> {
+    if main_window_startup_pending() {
+        set_quick_capture_state(QuickCaptureState::MainVisible);
+        hide_quick_capture_windows(app);
+        return Ok(());
+    }
+
     if current_panel_is_saving() {
         if let Some(panel) = app.get_webview_window(QUICK_CAPTURE_PANEL_LABEL) {
             if panel.is_visible().unwrap_or(false) {
@@ -1940,6 +1953,10 @@ pub(crate) fn reconcile_quick_capture_window_destroyed(app: &AppHandle, label: &
 }
 
 fn show_main(app: &AppHandle) -> Result<(), String> {
+    if main_window_startup_pending() {
+        return Ok(());
+    }
+
     let main = main_window(app)?;
     let preserve_panel = quick_capture_panel_should_be_preserved(app);
     if preserve_panel {
@@ -1962,6 +1979,10 @@ fn show_main(app: &AppHandle) -> Result<(), String> {
 }
 
 pub(crate) fn open_main_from_quick_capture_impl(app: &AppHandle) -> Result<(), String> {
+    if main_window_startup_pending() {
+        return Ok(());
+    }
+
     if current_panel_is_saving() {
         return Err("快速记录正在保存，请稍后再打开 Daymark".into());
     }
@@ -2040,6 +2061,12 @@ fn sync_quick_capture_lifecycle_on_main(app: &AppHandle) {
         }
 
         if quick_capture_degraded() {
+            return;
+        }
+
+        if main_window_startup_pending() {
+            set_quick_capture_state(QuickCaptureState::MainVisible);
+            hide_quick_capture_windows(&app_handle);
             return;
         }
 

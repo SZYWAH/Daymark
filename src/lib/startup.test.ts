@@ -13,7 +13,7 @@ describe("startup timing", () => {
   });
 
   it("starts leaving immediately when data becomes ready after the minimum", () => {
-    expect(getStartupExitDelay(900, true)).toBe(0);
+    expect(getStartupExitDelay(STARTUP_MIN_VISIBLE_MS + 300, true)).toBe(0);
   });
 
   it("reserves the exit animation inside the maximum total duration", () => {

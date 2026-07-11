@@ -4,6 +4,7 @@ import {
   getStartupExitDelay,
   STARTUP_EXIT_MS,
 } from "../lib/startup";
+import { notifyMainWindowFrontendReady } from "../lib/desktop";
 
 type StartupScreenProps = {
   ready: boolean;
@@ -51,6 +52,12 @@ export function StartupScreen({ ready, onComplete }: StartupScreenProps) {
     setExiting(true);
     completionTimerRef.current = window.setTimeout(finish, STARTUP_EXIT_MS);
   }, [finish]);
+
+  useEffect(() => {
+    void notifyMainWindowFrontendReady().catch((error) => {
+      console.error("Daymark 主窗口等待前端就绪失败", error);
+    });
+  }, []);
 
   useEffect(() => {
     const elapsed = now() - startedAtRef.current;

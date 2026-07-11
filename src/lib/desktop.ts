@@ -298,6 +298,12 @@ export async function showMainWindow() {
   await invoke("show_main_window");
 }
 
+export async function notifyMainWindowFrontendReady() {
+  if (!isDesktopRuntime()) return;
+
+  await invoke("main_window_frontend_ready");
+}
+
 export async function openMainFromQuickCapture() {
   if (!isDesktopRuntime()) return;
 

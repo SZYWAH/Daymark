@@ -233,11 +233,10 @@ pub fn run() {
             if let Err(error) = main_window_state::prepare_main_window(app) {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.center();
-                    let _ = main.show();
-                    let _ = main.set_focus();
                 }
                 eprintln!("failed to prepare main window: {error}");
             }
+            main_window_state::schedule_main_window_show_fallback(app.handle().clone());
             setup_tray(app)?;
             let quick_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
             if let Err(error) = app.global_shortcut().register(quick_shortcut) {
@@ -371,6 +370,7 @@ pub fn run() {
             conversation_sessions::read_conversation_session_deltas,
             conversation_sessions::cancel_codex_review_job,
             conversation_sessions::cancel_conversation_review_job,
+            main_window_state::main_window_frontend_ready,
             quick_capture::show_main_window,
             quick_capture::open_main_from_quick_capture,
             quick_capture::hide_main_to_tray,

@@ -1,7 +1,15 @@
 use serde::Deserialize;
 use std::collections::HashMap;
-use tauri::{Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::thread;
+use std::time::Duration;
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
+
+use crate::ensure_main_window;
+use crate::quick_capture::{
+    hide_quick_capture_windows, set_quick_capture_state, QuickCaptureState,
+};
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const WINDOW_STATE_FILENAME: &str = "daymark-main-window-state.json";
@@ -10,6 +18,12 @@ const PREFERRED_HEIGHT: f64 = 820.0;
 const MINIMUM_WIDTH: f64 = 1100.0;
 const MINIMUM_HEIGHT: f64 = 720.0;
 const WORK_AREA_RATIO: f64 = 0.88;
+const MAIN_STARTUP_FALLBACK_MS: u64 = 3_000;
+const STARTUP_PENDING: u8 = 0;
+const STARTUP_SHOWING: u8 = 1;
+const STARTUP_READY: u8 = 2;
+
+static MAIN_STARTUP_STATE: AtomicU8 = AtomicU8::new(STARTUP_PENDING);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PhysicalRect {
@@ -85,9 +99,74 @@ pub(crate) fn prepare_main_window(app: &tauri::App) -> tauri::Result<()> {
     if window.is_minimized().unwrap_or(false) {
         window.unminimize()?;
     }
-    window.show()?;
-    window.set_focus()?;
     Ok(())
+}
+
+pub(crate) fn main_window_startup_pending() -> bool {
+    MAIN_STARTUP_STATE.load(Ordering::SeqCst) != STARTUP_READY
+}
+
+fn claim_startup_show(state: &AtomicU8) -> bool {
+    state
+        .compare_exchange(
+            STARTUP_PENDING,
+            STARTUP_SHOWING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_ok()
+}
+
+fn finish_startup_show(state: &AtomicU8, succeeded: bool) {
+    state.store(
+        if succeeded { STARTUP_READY } else { STARTUP_PENDING },
+        Ordering::SeqCst,
+    );
+}
+
+fn show_prepared_main_window(app: &AppHandle) -> Result<(), String> {
+    if !claim_startup_show(&MAIN_STARTUP_STATE) {
+        return Ok(());
+    }
+
+    let result = (|| {
+        let main = app
+            .get_webview_window(MAIN_WINDOW_LABEL)
+            .ok_or_else(|| "Daymark main window is unavailable.".to_string())?;
+        main.unminimize().map_err(|error| error.to_string())?;
+        main.show().map_err(|error| error.to_string())?;
+        hide_quick_capture_windows(app);
+        set_quick_capture_state(QuickCaptureState::MainVisible);
+        main.set_focus().map_err(|error| error.to_string())
+    })();
+
+    finish_startup_show(&MAIN_STARTUP_STATE, result.is_ok());
+    result
+}
+
+#[tauri::command]
+pub(crate) fn main_window_frontend_ready(
+    window: WebviewWindow,
+    app: AppHandle,
+) -> Result<(), String> {
+    ensure_main_window(&window)?;
+    show_prepared_main_window(&app)
+}
+
+pub(crate) fn schedule_main_window_show_fallback(app: AppHandle) {
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(MAIN_STARTUP_FALLBACK_MS));
+        if !main_window_startup_pending() {
+            return;
+        }
+
+        let main_thread_app = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Err(error) = show_prepared_main_window(&main_thread_app) {
+                eprintln!("failed to show main window after frontend-ready timeout: {error}");
+            }
+        });
+    });
 }
 
 pub(crate) fn save_main_window_state(app: &tauri::AppHandle) {
@@ -365,5 +444,19 @@ mod tests {
             maximized: true,
         };
         assert!(saved_state_is_visible(state, &monitors));
+    }
+
+    #[test]
+    fn startup_show_claim_is_idempotent_and_retryable_after_failure() {
+        let state = AtomicU8::new(STARTUP_PENDING);
+        assert!(claim_startup_show(&state));
+        assert!(!claim_startup_show(&state));
+
+        finish_startup_show(&state, false);
+        assert!(claim_startup_show(&state));
+
+        finish_startup_show(&state, true);
+        assert_eq!(state.load(Ordering::SeqCst), STARTUP_READY);
+        assert!(!claim_startup_show(&state));
     }
 }
