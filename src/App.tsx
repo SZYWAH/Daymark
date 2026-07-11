@@ -676,7 +676,7 @@ export default function App() {
     async function loadData() {
       try {
         await seedDemoDataInDevIfEnabled();
-        const demoInitialization = await initializeDemoLibraryForFirstRun();
+        await initializeDemoLibraryForFirstRun();
         const dashboardSeq = nextTodayDashboardSeq();
         const memorySharedSeq = nextMemorySharedSeq();
         const todayKey = toDateKey(new Date());
@@ -741,10 +741,6 @@ export default function App() {
         setLinks(loadedLinks);
         applyTodayDashboardIfCurrent(dashboardSeq, loadedDashboard);
         setSelectedId("");
-        if (demoInitialization.installed) {
-          setActiveView({ kind: "folder", folderId: DEMO_LIBRARY_ROOT_ID });
-          setLastListView({ kind: "folder", folderId: DEMO_LIBRARY_ROOT_ID });
-        }
       } catch (loadError) {
         if (!mounted) return;
         setError(getSafeErrorMessage(loadError, "加载数据失败。"));
