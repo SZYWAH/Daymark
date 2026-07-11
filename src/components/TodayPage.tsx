@@ -544,7 +544,7 @@ function TodayFocusOverlay({
   }, [onClose, onSubmit]);
 
   return (
-    <div className="fixed inset-0 z-[90] bg-paper">
+    <div className="workspace-fullscreen-layer z-[90] bg-paper">
       <section aria-label={title} aria-modal="true" className="fullscreen-shell flex flex-col overflow-hidden" role="dialog">
         <header className="flex shrink-0 items-center justify-between border-b border-line/70 bg-panel/40 px-5 py-3 lg:px-7">
           <h3 className="text-sm font-semibold text-ink">{title}</h3>

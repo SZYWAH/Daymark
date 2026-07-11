@@ -765,12 +765,16 @@ button {
   }
 
   .fullscreen-shell {
-    height: 100dvh;
-    min-height: 100vh;
+    height: 100%;
+    min-height: 0;
     width: 100%;
     background:
       linear-gradient(180deg, rgb(var(--color-paper) / 0.98), rgb(var(--color-surface) / 0.94));
     box-shadow: none;
+  }
+
+  .workspace-fullscreen-layer {
+    @apply absolute inset-0;
   }
 
   .select-pop {

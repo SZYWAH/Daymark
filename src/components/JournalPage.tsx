@@ -1206,7 +1206,7 @@ function JournalFullscreenComposer({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] bg-paper/82 backdrop-blur-sm">
+    <div className="workspace-fullscreen-layer z-[60] bg-paper/82 backdrop-blur-sm">
       <div aria-label="安静写作" aria-modal="true" className="fullscreen-shell flex flex-col overflow-hidden" role="dialog">
         <div className="flex shrink-0 items-center justify-between border-b border-line bg-panel/70 px-4 py-3">
           <div>
@@ -1425,7 +1425,7 @@ function JournalEntryFullscreenOverlay({
   };
 
   return (
-    <div className="fixed inset-0 z-[90] bg-paper">
+    <div className="workspace-fullscreen-layer z-[90] bg-paper">
       <section aria-label="日志全屏查看" aria-modal="true" className="fullscreen-shell flex flex-col overflow-hidden" role="dialog">
         <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2.5 lg:px-7">
           <div className="min-w-0">
