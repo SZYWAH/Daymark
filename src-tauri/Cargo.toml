@@ -1,6 +1,6 @@
 [package]
 name = "daymark"
-version = "0.1.0-rc.5.1"
+version = "0.1.0-rc.6"
 description = "Daymark local-first desktop knowledge base"
 authors = ["local"]
 edition = "2021"
@@ -24,4 +24,5 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 lopdf = "0.35"
 base64 = "0.22"
 keyring = { version = "4.1.4", features = ["v1"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+tauri-plugin-window-state = "2.4.1"

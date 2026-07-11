@@ -1,6 +1,7 @@
 mod ai_secrets;
 mod conversation_sessions;
 mod file_commands;
+mod main_window_state;
 mod quick_capture;
 mod text_utils;
 
@@ -200,6 +201,7 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(main_window_state::plugin())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             route_second_launch_to_main(app);
         }))
@@ -228,6 +230,14 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            if let Err(error) = main_window_state::prepare_main_window(app) {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.center();
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                }
+                eprintln!("failed to prepare main window: {error}");
+            }
             setup_tray(app)?;
             let quick_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
             if let Err(error) = app.global_shortcut().register(quick_shortcut) {
@@ -257,6 +267,7 @@ pub fn run() {
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
+                        main_window_state::save_main_window_state(window.app_handle());
                         let _ = hide_main(window.app_handle());
                     }
                     WindowEvent::Resized(_) => {

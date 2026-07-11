@@ -28,6 +28,8 @@ import { MemoryPage } from "./components/MemoryPage";
 import { SearchPage } from "./components/SearchPage";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { MobileGlobalNav, Sidebar } from "./components/Sidebar";
+import { MainWindowTitleBar } from "./components/MainWindowTitleBar";
+import { StartupScreen } from "./components/StartupScreen";
 import { TodayPage } from "./components/TodayPage";
 import {
   createKnowledgeLink,
@@ -87,6 +89,7 @@ import { flattenFolderOptions, getFolderAndDescendantIds } from "./lib/folders";
 import { applyThemeMode, bindSystemThemeListener } from "./lib/theme";
 import { getSafeErrorMessage } from "./lib/redaction";
 import { markOnboardingCompleted, shouldShowOnboarding } from "./lib/onboarding";
+import { shouldOpenFirstRunGuide } from "./lib/startup";
 import {
   DEMO_LIBRARY_ROOT_ID,
   getDemoLibraryState,
@@ -586,6 +589,7 @@ export default function App() {
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const [folderPrompt, setFolderPrompt] = useState<FolderPromptState | null>(null);
   const [firstRunGuideOpen, setFirstRunGuideOpen] = useState(false);
+  const [startupComplete, setStartupComplete] = useState(false);
   const [demoLibraryState, setDemoLibraryState] = useState<DemoLibraryState>({ installed: false, itemCount: 0, folderCount: 0 });
   const [firstRunGuideAutoPending, setFirstRunGuideAutoPending] = useState(() => shouldShowOnboarding());
   const [todayComposerFocusRequest, setTodayComposerFocusRequest] = useState(0);
@@ -618,6 +622,10 @@ export default function App() {
     setFirstRunGuideOpen(false);
   }, []);
 
+  const handleStartupComplete = useCallback(() => {
+    setStartupComplete(true);
+  }, []);
+
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
@@ -627,10 +635,10 @@ export default function App() {
   }, [autoWorkReviewSettings]);
 
   useEffect(() => {
-    if (loading || !firstRunGuideAutoPending) return;
+    if (!shouldOpenFirstRunGuide({ loading, startupComplete, pending: firstRunGuideAutoPending })) return;
     setFirstRunGuideAutoPending(false);
     setFirstRunGuideOpen(true);
-  }, [firstRunGuideAutoPending, loading]);
+  }, [firstRunGuideAutoPending, loading, startupComplete]);
 
   const nextTodayDashboardSeq = () => {
     todayDashboardSeqRef.current += 1;
@@ -2423,9 +2431,18 @@ export default function App() {
     });
   };
 
+  if (!startupComplete) {
+    return (
+      <main className="app-shell">
+        <StartupScreen ready={!loading} onComplete={handleStartupComplete} />
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
-      <div className="flex h-screen overflow-hidden">
+      <MainWindowTitleBar />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar
           folders={folders}
           items={items}
