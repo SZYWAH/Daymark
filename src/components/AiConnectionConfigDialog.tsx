@@ -17,8 +17,18 @@ export function AiConnectionConfigDialog({
   footer,
 }: AiConnectionConfigDialogProps) {
   const dialogRef = useRef<HTMLElement | null>(null);
+  const busyRef = useRef(busy);
+  const requestCloseRef = useRef(onRequestClose);
   const titleId = useId();
   const descriptionId = useId();
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  useEffect(() => {
+    requestCloseRef.current = onRequestClose;
+  }, [onRequestClose]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -28,9 +38,9 @@ export function AiConnectionConfigDialog({
     }, 30);
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) {
+      if (event.key === "Escape" && !busyRef.current) {
         event.preventDefault();
-        onRequestClose();
+        requestCloseRef.current();
         return;
       }
       if (event.key !== "Tab" || !dialog) return;
@@ -54,7 +64,7 @@ export function AiConnectionConfigDialog({
       window.clearTimeout(focusInitialControl);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [busy, onRequestClose, open]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -86,7 +96,7 @@ export function AiConnectionConfigDialog({
             <X size={15} />
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 scrollbar-thin">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 scrollbar-thin [scrollbar-gutter:stable]">{children}</div>
         <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-panel/70 px-5 py-3">
           {footer}
         </footer>

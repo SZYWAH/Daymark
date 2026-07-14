@@ -1,5 +1,5 @@
 import { Check, ChevronDown } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 export type SelectOption = {
@@ -17,6 +17,15 @@ type SelectMenuProps = {
   searchable?: boolean;
   disabled?: boolean;
   triggerClassName?: string;
+  renderTrigger?: (props: SelectMenuRenderTriggerProps) => ReactNode;
+};
+
+type SelectMenuRenderTriggerProps = {
+  open: boolean;
+  menuId: string;
+  activeOptionId?: string;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+  toggle: () => void;
 };
 
 export function SelectMenu({
@@ -27,6 +36,7 @@ export function SelectMenu({
   searchable = false,
   disabled = false,
   triggerClassName = "",
+  renderTrigger,
 }: SelectMenuProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -163,6 +173,7 @@ export function SelectMenu({
   };
 
   const activeOptionId = open && filteredOptions[activeIndex] ? `${menuId}-option-${activeIndex}` : undefined;
+  const toggle = () => setOpen((current) => !current);
 
   const menu =
     open && !disabled ? (
@@ -233,26 +244,36 @@ export function SelectMenu({
 
   return (
     <div ref={triggerRef} className="relative">
-      <button
-        ref={buttonRef}
-        type="button"
-        disabled={disabled}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        aria-activedescendant={activeOptionId}
-        className={`field-control flex w-full items-center justify-between gap-2 text-left shadow-sm hover:border-accent/35 hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-60 ${triggerClassName || "field-prominent"}`}
-        onClick={() => setOpen((current) => !current)}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            setOpen(true);
-          }
-        }}
-      >
-        <span className={selected ? "truncate" : "truncate text-ink/40"}>{selected?.label ?? placeholder}</span>
-        <ChevronDown size={15} className={`shrink-0 text-ink/50 transition ${open ? "rotate-180" : ""}`} />
-      </button>
+      {renderTrigger ? (
+        renderTrigger({
+          open,
+          menuId,
+          activeOptionId,
+          buttonRef,
+          toggle,
+        })
+      ) : (
+        <button
+          ref={buttonRef}
+          type="button"
+          disabled={disabled}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          aria-activedescendant={activeOptionId}
+          className={`field-control flex w-full items-center justify-between gap-2 text-left shadow-sm hover:border-accent/35 hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-60 ${triggerClassName || "field-prominent"}`}
+          onClick={toggle}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              setOpen(true);
+            }
+          }}
+        >
+          <span className={selected ? "truncate" : "truncate text-ink/40"}>{selected?.label ?? placeholder}</span>
+          <ChevronDown size={15} className={`shrink-0 text-ink/50 transition ${open ? "rotate-180" : ""}`} />
+        </button>
+      )}
 
       {menu && createPortal(menu, document.body)}
     </div>

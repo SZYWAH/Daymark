@@ -1,6 +1,7 @@
 import {
   Bot,
   CheckCircle2,
+  ChevronDown,
   CircleHelp,
   Database,
   Download,
@@ -132,6 +133,8 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
   const [quickCaptureTopEntryBusy, setQuickCaptureTopEntryBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"ok" | "error" | "info">("info");
+  const [aiConfigMessage, setAiConfigMessage] = useState("");
+  const [aiConfigMessageType, setAiConfigMessageType] = useState<"ok" | "error" | "info">("info");
   const themeSaveSeqRef = useRef(0);
   const themeSavingRef = useRef(false);
   const savingRef = useRef(false);
@@ -234,11 +237,12 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
       });
   }, [credentialAddress, desktop, draft.provider, draft.baseUrl, draft.manualApiKey, draft.manualKeyClearRequested]);
 
-  const saveSettings = async () => {
+  const saveSettings = async ({ closeOnSuccess = false }: { closeOnSuccess?: boolean } = {}) => {
     if (savingRef.current || themeSavingRef.current) return false;
     savingRef.current = true;
     setSaving(true);
-    setMessage("");
+    setAiConfigMessage("正在保存设置…");
+    setAiConfigMessageType("info");
 
     try {
       const saved = {
@@ -247,11 +251,12 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
       };
       await onSave(saved);
       setMessageType("ok");
-      setMessage("设置已保存。");
+      setMessage(closeOnSuccess ? "AI 连接已保存。" : "设置已保存。");
+      if (closeOnSuccess) finishClosingAiConfig();
       return true;
     } catch (error) {
-      setMessageType("error");
-      setMessage(getSafeErrorMessage(error, "保存失败。"));
+      setAiConfigMessageType("error");
+      setAiConfigMessage(getSafeErrorMessage(error, "保存失败。"));
       return false;
     } finally {
       savingRef.current = false;
@@ -396,15 +401,16 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
     if (testingRef.current) return;
     testingRef.current = true;
     setTesting(true);
-    setMessage("");
+    setAiConfigMessage("正在测试连接…");
+    setAiConfigMessageType("info");
 
     try {
       const result = await testAiConnection(draft);
-      setMessageType("ok");
-      setMessage(result || "连接正常。");
+      setAiConfigMessageType("ok");
+      setAiConfigMessage(result || "连接正常。");
     } catch (error) {
-      setMessageType("error");
-      setMessage(getSafeErrorMessage(error, "测试连接失败。"));
+      setAiConfigMessageType("error");
+      setAiConfigMessage(getSafeErrorMessage(error, "测试连接失败。"));
     } finally {
       testingRef.current = false;
       setTesting(false);
@@ -414,15 +420,16 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
   const fetchModels = async () => {
     if (modelsLoading) return;
     setModelsLoading(true);
-    setMessage("");
+    setAiConfigMessage("正在获取模型列表…");
+    setAiConfigMessageType("info");
     try {
       const models = await fetchAvailableAiModels(draft);
       setAvailableModels(models);
-      setMessageType("ok");
-      setMessage(`已获取 ${models.length} 个模型；可从列表选择，也可继续手动输入。`);
+      setAiConfigMessageType("ok");
+      setAiConfigMessage(`已获取 ${models.length} 个模型；可从列表选择，也可继续手动输入。`);
     } catch (error) {
-      setMessageType("error");
-      setMessage(getSafeErrorMessage(error, "获取模型列表失败。"));
+      setAiConfigMessageType("error");
+      setAiConfigMessage(getSafeErrorMessage(error, "获取模型列表失败。"));
     } finally {
       setModelsLoading(false);
     }
@@ -470,6 +477,12 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
     setAiCloseConfirmOpen(false);
     setAiConfigOpen(false);
     window.setTimeout(() => aiConfigTriggerRef.current?.focus(), 0);
+  };
+
+  const openAiConfig = () => {
+    setAiConfigMessage("");
+    setAiConfigMessageType("info");
+    setAiConfigOpen(true);
   };
 
   const requestCloseAiConfig = () => {
@@ -531,7 +544,7 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
                 type="button"
                 className="secondary-action action-standard shrink-0 gap-1.5 text-xs"
                 disabled={themeSaving || saving}
-                onClick={() => setAiConfigOpen(true)}
+                onClick={openAiConfig}
                 aria-haspopup="dialog"
                 aria-expanded={aiConfigOpen}
               >
@@ -673,7 +686,7 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
             <>
               <button
                 type="button"
-                className="secondary-action action-standard text-xs"
+                className="secondary-action action-standard min-w-[116px] text-xs"
                 disabled={testing || saving || themeSaving}
                 onClick={() => void testConnection()}
               >
@@ -682,12 +695,12 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
               </button>
               <button
                 type="button"
-                className={`${aiDirty ? "primary-action" : "secondary-action"} action-standard text-xs disabled:cursor-not-allowed disabled:opacity-55`}
+                className="primary-action action-standard min-w-[132px] text-xs disabled:cursor-not-allowed disabled:opacity-55"
                 disabled={saving || themeSaving || !aiDirty}
-                onClick={() => void saveSettings()}
+                onClick={() => void saveSettings({ closeOnSuccess: true })}
               >
                 {saving ? <RefreshCw size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
-                {saving ? "保存中" : "保存设置"}
+                {saving ? "保存中" : "保存并关闭"}
               </button>
             </>
           }
@@ -740,11 +753,46 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
             <label className="text-xs font-medium text-ink/58">
               模型
               <div className="mt-1 flex gap-2">
-                <input
-                  value={draft.model}
-                  onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                  className="field-control field-prominent min-w-0 flex-1"
-                />
+                <div className="min-w-0 flex-1">
+                  {draft.provider === "openai-compatible" && availableModels.length > 0 ? (
+                    <SelectMenu
+                      value={draft.model}
+                      options={availableModels.map((model) => ({ value: model.id, label: model.id }))}
+                      searchable
+                      onChange={(model) => setDraft({ ...draft, model })}
+                      renderTrigger={({ open, menuId, activeOptionId, buttonRef, toggle }) => (
+                        <div className="relative">
+                          <input
+                            value={draft.model}
+                            onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+                            className="field-control field-prominent w-full pr-10"
+                            aria-autocomplete="list"
+                            aria-controls={open ? menuId : undefined}
+                            aria-activedescendant={activeOptionId}
+                          />
+                          <button
+                            ref={buttonRef}
+                            type="button"
+                            className="absolute inset-y-1 right-1 flex w-8 items-center justify-center rounded-[6px] text-ink/50 transition hover:bg-accent/10 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70"
+                            aria-label="选择已获取模型"
+                            aria-haspopup="listbox"
+                            aria-expanded={open}
+                            aria-controls={open ? menuId : undefined}
+                            onClick={toggle}
+                          >
+                            <ChevronDown size={15} className={`transition ${open ? "rotate-180" : ""}`} />
+                          </button>
+                        </div>
+                      )}
+                    />
+                  ) : (
+                    <input
+                      value={draft.model}
+                      onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+                      className="field-control field-prominent w-full"
+                    />
+                  )}
+                </div>
                 {draft.provider === "openai-compatible" && (
                   <button
                     type="button"
@@ -757,18 +805,6 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
                   </button>
                 )}
               </div>
-              {draft.provider === "openai-compatible" && availableModels.length > 0 && (
-                <div className="mt-2">
-                  <SelectMenu
-                    value={availableModels.some((model) => model.id === draft.model) ? draft.model : ""}
-                    options={availableModels.map((model) => ({ value: model.id, label: model.id }))}
-                    placeholder="从已获取模型中选择"
-                    searchable
-                    triggerClassName="field-standard text-xs"
-                    onChange={(model) => setDraft({ ...draft, model })}
-                  />
-                </div>
-              )}
             </label>
           </div>
 
@@ -965,15 +1001,12 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-ink/45">
-              当前连接：{getConnectionPresetLabel(draft)} · {getConnectionProtocolLabel(draft)} · 模型：{draft.model.trim() || "未填写"}
-              {` · 凭据：${credentialStatusLabel}`}
-            </span>
-            {aiDirty && <span className="text-xs text-copper/80">有未保存修改</span>}
-          </div>
-
-          {message && <SettingsMessage message={message} messageType={messageType} />}
+          <AiConnectionStatusSlot
+            summary={`当前连接：${getConnectionPresetLabel(draft)} · ${getConnectionProtocolLabel(draft)} · 模型：${draft.model.trim() || "未填写"} · 凭据：${credentialStatusLabel}`}
+            dirty={aiDirty}
+            message={aiConfigMessage}
+            messageType={aiConfigMessageType}
+          />
 
           <p className="text-xs leading-5 text-ink/42">
             “测试连接”只发送最小连接请求，用于确认模型可访问；不会发送资料库、日志或记忆正文。
@@ -1031,6 +1064,44 @@ function SettingsMessage({
     >
       {messageType === "ok" ? <CheckCircle2 size={16} /> : messageType === "error" ? <XCircle size={16} /> : <ShieldCheck size={16} />}
       <span className="min-w-0 whitespace-pre-wrap text-anywhere">{message}</span>
+    </div>
+  );
+}
+
+function AiConnectionStatusSlot({
+  summary,
+  dirty,
+  message,
+  messageType,
+}: {
+  summary: string;
+  dirty: boolean;
+  message: string;
+  messageType: "ok" | "error" | "info";
+}) {
+  const statusClassName = messageType === "ok"
+    ? "text-ink/72"
+    : messageType === "error"
+      ? "text-red-400"
+      : "text-ink/48";
+  const StatusIcon = messageType === "ok" ? CheckCircle2 : messageType === "error" ? XCircle : ShieldCheck;
+
+  return (
+    <div className="h-[60px] overflow-hidden">
+      <p className="truncate text-xs text-ink/45" title={summary}>
+        {summary}
+        {dirty && <span className="text-copper/80"> · 有未保存修改</span>}
+      </p>
+      <div
+        role={messageType === "error" ? "alert" : "status"}
+        aria-live={messageType === "error" ? "assertive" : "polite"}
+        className={`mt-1 flex h-8 items-start gap-1.5 overflow-y-auto pr-1 text-xs leading-4 scrollbar-thin ${statusClassName}`}
+      >
+        {message && <>
+          <StatusIcon size={14} className="mt-px shrink-0" aria-hidden="true" />
+          <span className="min-w-0 text-anywhere">{message}</span>
+        </>}
+      </div>
     </div>
   );
 }
