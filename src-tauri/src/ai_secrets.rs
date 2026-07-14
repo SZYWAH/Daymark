@@ -69,6 +69,7 @@ fn normalize_ai_key_provider(provider: &str) -> Result<&'static str, String> {
     match provider.trim() {
         "deepseek" => Ok("deepseek"),
         "openai-compatible" | "OpenAICompatible" => Ok("openai-compatible"),
+        "anthropic-messages" => Ok("anthropic-messages"),
         _ => Err("未知 AI 供应商。".into()),
     }
 }

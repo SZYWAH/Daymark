@@ -1,7 +1,10 @@
 import type {
   AiAction,
   AiActionContext,
+  AiProtocol,
+  AiReasoningEffort,
   AiSettings,
+  AnthropicAuthMode,
   CodexDailyReview,
   CodexReviewInput,
   ConversationReviewInput,
@@ -14,6 +17,16 @@ import type {
 } from "../types";
 import { resolveAiSettingsForRequest } from "../lib/aiSecrets";
 import { getSafeErrorMessage } from "../lib/redaction";
+import {
+  type AiInputContentBlock,
+  type AiInputMessage,
+  type DesktopAiGenerateRequest,
+  type AiModelOption,
+  hasDesktopAiTransport,
+  requestDesktopAiModels,
+  requestDesktopAiGeneration,
+  streamDesktopAiGeneration,
+} from "../lib/aiTransport";
 
 type ChatMessageContent =
   | string
@@ -28,7 +41,7 @@ type ChatMessageContent =
     >;
 
 type ChatMessage = {
-  role: "system" | "user";
+  role: "system" | "user" | "assistant";
   content: ChatMessageContent;
 };
 
@@ -52,6 +65,47 @@ type ChatCompletionStreamChunk = {
   error?: {
     message?: string;
   };
+};
+
+type AnthropicMessageResponse = {
+  content?: Array<{ type?: string; text?: string }>;
+  error?: { message?: string };
+};
+
+type AnthropicStreamEvent = {
+  type?: string;
+  delta?: { type?: string; text?: string };
+  error?: { message?: string };
+};
+
+type OpenAiResponsesResponse = {
+  output_text?: string;
+  output?: Array<{
+    content?: Array<{ type?: string; text?: string }>;
+  }>;
+  status?: string;
+  incomplete_details?: { reason?: string };
+  error?: { message?: string };
+};
+
+type OpenAiResponsesStreamEvent = {
+  type?: string;
+  delta?: string;
+  response?: OpenAiResponsesResponse;
+  error?: { message?: string };
+};
+
+type ModelsResponse = {
+  data?: Array<{
+    id?: string;
+    supported_reasoning_efforts?: string[];
+  }>;
+  error?: { message?: string };
+};
+
+type NormalizedAiPrompt = {
+  system?: string;
+  messages: AiInputMessage[];
 };
 
 type EffectiveAiSettings = AiSettings & {
@@ -138,11 +192,14 @@ export function hasEnvApiKey() {
 }
 
 export function getProviderLabel(settings: Pick<AiSettings, "provider" | "customProviderName">) {
-  return settings.provider === "openai-compatible" ? settings.customProviderName?.trim() || "OpenAI 兼容模型" : "DeepSeek";
+  if (settings.provider === "openai-compatible") {
+    return settings.customProviderName?.trim() || "OpenAI 兼容模型";
+  }
+  return settings.provider === "anthropic-messages" ? "Anthropic Messages" : "DeepSeek";
 }
 
 export function getEffectiveAiSettings(settings: AiSettings): EffectiveAiSettings {
-  const isDeepSeek = settings.provider !== "openai-compatible";
+  const isDeepSeek = settings.provider === "deepseek";
   const envApiKey = isDeepSeek && settings.useEnvKey ? import.meta.env.VITE_DEEPSEEK_API_KEY?.trim() : "";
   const manualApiKey = settings.manualApiKey?.trim();
   const apiKey = envApiKey || manualApiKey || "";
@@ -150,7 +207,20 @@ export function getEffectiveAiSettings(settings: AiSettings): EffectiveAiSetting
 
   return {
     ...settings,
-    provider: isDeepSeek ? "deepseek" : "openai-compatible",
+    provider: settings.provider === "anthropic-messages"
+      ? "anthropic-messages"
+      : isDeepSeek
+        ? "deepseek"
+        : "openai-compatible",
+    protocol: settings.provider === "anthropic-messages"
+      ? "anthropic-messages"
+      : settings.provider === "openai-compatible" && settings.protocol === "openai-responses"
+        ? "openai-responses"
+        : "openai-chat-completions",
+    reasoningEffort: REASONING_EFFORTS.has(settings.reasoningEffort as Exclude<AiReasoningEffort, "default">)
+      ? settings.reasoningEffort
+      : "default",
+    anthropicAuthMode: settings.anthropicAuthMode === "bearer" ? "bearer" : "x-api-key",
     baseUrl: isDeepSeek && settings.useEnvKey ? import.meta.env.VITE_DEEPSEEK_BASE_URL || settings.baseUrl : settings.baseUrl,
     model: isDeepSeek && settings.useEnvKey ? import.meta.env.VITE_DEEPSEEK_MODEL || settings.model : settings.model,
     apiKey,
@@ -181,7 +251,7 @@ export async function runAiAction(
   options: AiRequestOptions = {},
 ): Promise<AiActionResult> {
   if (context.imageDataUrl && !settings.supportsVision) {
-    throw new Error("当前模型未开启图片分析能力，请在设置页切换到支持视觉的 OpenAI 兼容模型。");
+    throw new Error("当前模型未开启图片分析能力，请在设置页确认供应商和模型支持视觉后开启该能力。");
   }
   if (item.filePath && !context.fileText?.trim() && !context.imageDataUrl) {
     throw new Error("本地附件还没有完成可信读取，AI 操作已停止。不会根据路径或旧摘要猜测文件内容。");
@@ -632,13 +702,311 @@ export async function extractCodexMemoryCandidates(
     .slice(0, 8);
 }
 
-function buildEndpoint(baseUrl: string) {
+export function buildChatCompletionsEndpoint(baseUrl: string) {
   const trimmed = baseUrl.trim().replace(/\/$/, "");
   if (trimmed.endsWith("/chat/completions")) {
     return trimmed;
   }
 
   return `${trimmed}/chat/completions`;
+}
+
+export function buildAnthropicMessagesEndpoint(baseUrl: string) {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  if (trimmed.endsWith("/messages")) return trimmed;
+  if (trimmed.endsWith("/v1")) return `${trimmed}/messages`;
+  return `${trimmed}/v1/messages`;
+}
+
+export function buildOpenAiResponsesEndpoint(baseUrl: string) {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  if (trimmed.endsWith("/responses")) return trimmed;
+  if (trimmed.endsWith("/v1")) return `${trimmed}/responses`;
+  return `${trimmed}/responses`;
+}
+
+export function buildOpenAiModelEndpoints(baseUrl: string) {
+  const url = new URL(baseUrl.trim());
+  let path = url.pathname.replace(/\/+$/, "");
+  path = path.replace(/\/(?:chat\/completions|responses)$/i, "").replace(/\/+$/, "");
+  const endsWithV1 = /\/v1$/i.test(path);
+  const primaryPath = endsWithV1 ? `${path}/models` : `${path}/v1/models`;
+  const fallbackBase = endsWithV1 ? path.replace(/\/v1$/i, "") : path;
+  const fallbackPath = `${fallbackBase}/models`;
+  return [...new Set([primaryPath, fallbackPath].map((pathname) => {
+    const normalizedPath = pathname.startsWith("/") ? pathname : `/${pathname}`;
+    return new URL(normalizedPath, url.origin).toString().replace(/\/$/, "");
+  }))];
+}
+
+const REASONING_EFFORTS = new Set<Exclude<AiReasoningEffort, "default">>([
+  "none", "minimal", "low", "medium", "high", "xhigh",
+]);
+
+export function parseModelListResponse(data: ModelsResponse): AiModelOption[] {
+  const byId = new Map<string, AiModelOption>();
+  for (const item of data.data ?? []) {
+    const id = item.id?.trim();
+    if (!id) continue;
+    const efforts = item.supported_reasoning_efforts
+      ?.filter((value): value is Exclude<AiReasoningEffort, "default"> =>
+        REASONING_EFFORTS.has(value as Exclude<AiReasoningEffort, "default">));
+    byId.set(id, {
+      id,
+      ...(efforts?.length ? { supportedReasoningEfforts: [...new Set(efforts)] } : {}),
+    });
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export async function fetchAvailableAiModels(settings: AiSettings): Promise<AiModelOption[]> {
+  const effective = getEffectiveAiSettings(await resolveAiSettingsForRequest(settings));
+  if (effective.provider !== "openai-compatible") {
+    throw new Error("仅 OpenAI 兼容自定义供应商支持获取模型列表。");
+  }
+  if (!effective.apiKey) throw new Error("请先输入或保存当前 Base URL 对应的 API Key。");
+
+  if (hasDesktopAiTransport()) {
+    return requestDesktopAiModels({ baseUrl: effective.baseUrl, apiKey: effective.apiKey, timeoutMs: 30_000 });
+  }
+
+  const endpoints = buildOpenAiModelEndpoints(effective.baseUrl);
+  let lastError: unknown;
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${effective.apiKey}` },
+      });
+      const data = (await response.json().catch(() => ({}))) as ModelsResponse;
+      if (!response.ok) {
+        const error = new Error(data.error?.message || `获取模型失败（HTTP ${response.status}）。`);
+        if (response.status === 404) {
+          lastError = error;
+          continue;
+        }
+        throw error;
+      }
+      const models = parseModelListResponse(data);
+      if (!models.length) throw new Error("模型接口返回了空列表或不兼容的数据格式。");
+      return models;
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof TypeError)) throw error;
+      break;
+    }
+  }
+  throw new Error(getSafeErrorMessage(lastError, "无法获取模型列表；Web 模式还可能受到 CORS 限制。"));
+}
+
+export function getAiProtocol(settings: Pick<AiSettings, "provider" | "protocol">): AiProtocol {
+  if (settings.provider === "anthropic-messages") return "anthropic-messages";
+  if (settings.provider === "openai-compatible" && settings.protocol === "openai-responses") {
+    return "openai-responses";
+  }
+  return "openai-chat-completions";
+}
+
+export function normalizeAiPrompt(messages: ChatMessage[]): NormalizedAiPrompt {
+  const system = messages
+    .filter((message) => message.role === "system")
+    .map((message) => extractTextContent(message.content))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  const normalizedMessages = messages
+    .filter((message) => message.role !== "system")
+    .map((message): AiInputMessage => ({
+      role: message.role === "assistant" ? "assistant" : "user",
+      content: normalizeContentBlocks(message.content),
+    }))
+    .filter((message) => message.content.length > 0);
+
+  return {
+    system: system || undefined,
+    messages: normalizedMessages,
+  };
+}
+
+function extractTextContent(content: ChatMessageContent) {
+  if (typeof content === "string") return content;
+  return content
+    .filter((block): block is Extract<(typeof content)[number], { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+}
+
+function normalizeContentBlocks(content: ChatMessageContent): AiInputContentBlock[] {
+  if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
+  return content.map((block): AiInputContentBlock => {
+    if (block.type === "text") return { type: "text", text: block.text };
+    const match = /^data:([^;,]+);base64,(.+)$/s.exec(block.image_url.url);
+    if (!match || !match[1].toLowerCase().startsWith("image/")) {
+      throw new Error("图片消息必须来自 Daymark 已明确读取的本地图片。");
+    }
+    return { type: "image", mediaType: match[1].toLowerCase(), data: match[2] };
+  });
+}
+
+function createAiGenerateRequest(
+  effective: EffectiveAiSettings,
+  messages: ChatMessage[],
+  maxTokens: number,
+  timeoutMs: number,
+): DesktopAiGenerateRequest {
+  const protocol = getAiProtocol(effective);
+  const prompt = normalizeAiPrompt(messages);
+  return {
+    protocol,
+    endpoint: protocol === "anthropic-messages"
+      ? buildAnthropicMessagesEndpoint(effective.baseUrl)
+      : protocol === "openai-responses"
+        ? buildOpenAiResponsesEndpoint(effective.baseUrl)
+        : buildChatCompletionsEndpoint(effective.baseUrl),
+    apiKey: effective.apiKey,
+    authMode: effective.anthropicAuthMode === "bearer" ? "bearer" : "x-api-key",
+    model: effective.model,
+    system: prompt.system,
+    messages: prompt.messages,
+    temperature: protocol === "openai-chat-completions" ? 0.2 : undefined,
+    maxTokens,
+    reasoningEffort: protocol === "openai-responses" && effective.reasoningEffort && effective.reasoningEffort !== "default"
+      ? effective.reasoningEffort as Exclude<AiReasoningEffort, "default">
+      : undefined,
+    timeoutMs,
+  };
+}
+
+export function buildBrowserAiRequest(request: DesktopAiGenerateRequest, stream: boolean) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (request.protocol === "anthropic-messages") {
+    headers[request.authMode === "bearer" ? "Authorization" : "x-api-key"] =
+      request.authMode === "bearer" ? `Bearer ${request.apiKey}` : request.apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+    return {
+      headers,
+      body: {
+        model: request.model,
+        ...(request.system ? { system: request.system } : {}),
+        messages: request.messages.map((message) => ({
+          role: message.role,
+          content: message.content.map((block) => block.type === "text"
+            ? { type: "text", text: block.text }
+            : {
+                type: "image",
+                source: { type: "base64", media_type: block.mediaType, data: block.data },
+              }),
+        })),
+        stream,
+        max_tokens: request.maxTokens,
+      },
+    };
+  }
+
+  if (request.protocol === "openai-responses") {
+    headers.Authorization = `Bearer ${request.apiKey}`;
+    return {
+      headers,
+      body: {
+        model: request.model,
+        ...(request.system ? { instructions: request.system } : {}),
+        input: request.messages.map((message) => ({
+          role: message.role,
+          content: message.content.map((block) => block.type === "text"
+            ? { type: "input_text", text: block.text }
+            : {
+                type: "input_image",
+                image_url: `data:${block.mediaType};base64,${block.data}`,
+                detail: "auto",
+              }),
+        })),
+        stream,
+        store: false,
+        ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {}),
+      },
+    };
+  }
+
+  headers.Authorization = `Bearer ${request.apiKey}`;
+  return {
+    headers,
+    body: {
+      model: request.model,
+      messages: [
+        ...(request.system ? [{ role: "system", content: request.system }] : []),
+        ...request.messages.map((message) => ({
+          role: message.role,
+          content: toOpenAiContent(message.content),
+        })),
+      ],
+      stream,
+      ...(request.temperature == null ? {} : { temperature: request.temperature }),
+      max_tokens: request.maxTokens,
+    },
+  };
+}
+
+function toOpenAiContent(content: AiInputContentBlock[]) {
+  if (content.every((block) => block.type === "text")) {
+    return content.map((block) => block.type === "text" ? block.text : "").join("\n");
+  }
+  return content.map((block) => block.type === "text"
+    ? { type: "text", text: block.text }
+    : { type: "image_url", image_url: { url: `data:${block.mediaType};base64,${block.data}` } });
+}
+
+export function extractResponsesContent(data: OpenAiResponsesResponse) {
+  const topLevel = data.output_text?.trim();
+  if (topLevel) return topLevel;
+  return data.output
+    ?.flatMap((item) => item.content ?? [])
+    .filter((block) => block.type === "output_text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("")
+    .trim();
+}
+
+function extractBrowserCompletionContent(
+  protocol: AiProtocol,
+  data: ChatCompletionResponse | AnthropicMessageResponse | OpenAiResponsesResponse,
+) {
+  if (protocol === "anthropic-messages") {
+    return (data as AnthropicMessageResponse).content
+      ?.filter((block) => block.type === "text" && typeof block.text === "string")
+      .map((block) => block.text)
+      .join("")
+      .trim();
+  }
+  if (protocol === "openai-responses") return extractResponsesContent(data as OpenAiResponsesResponse);
+  return (data as ChatCompletionResponse).choices?.[0]?.message?.content?.trim();
+}
+
+export function extractBrowserStreamToken(
+  protocol: AiProtocol,
+  event: ChatCompletionStreamChunk | AnthropicStreamEvent | OpenAiResponsesStreamEvent,
+  hasText = false,
+) {
+  if (event.error?.message) throw new Error(event.error.message);
+  if (protocol === "anthropic-messages") {
+    const anthropic = event as AnthropicStreamEvent;
+    return anthropic.type === "content_block_delta" && anthropic.delta?.type === "text_delta"
+      ? anthropic.delta.text ?? ""
+      : "";
+  }
+  if (protocol === "openai-responses") {
+    const responses = event as OpenAiResponsesStreamEvent;
+    if (responses.type === "response.failed") {
+      throw new Error(responses.response?.error?.message || "Responses request failed.");
+    }
+    if (responses.type === "response.incomplete") {
+      throw new Error(responses.response?.incomplete_details?.reason || "Responses request was incomplete.");
+    }
+    if (responses.type === "response.output_text.delta") return responses.delta ?? "";
+    if (responses.type === "response.completed" && !hasText && responses.response) {
+      return extractResponsesContent(responses.response) ?? "";
+    }
+    return "";
+  }
+  return (event as ChatCompletionStreamChunk).choices?.[0]?.delta?.content ?? "";
 }
 
 async function callDeepSeek(
@@ -654,29 +1022,35 @@ async function callDeepSeek(
   }
 
   const timeoutMs = options.timeoutMs ?? AI_REQUEST_TIMEOUT_MS;
+  const request = createAiGenerateRequest(effective, messages, options.maxTokens ?? 1200, timeoutMs);
+  if (hasDesktopAiTransport()) {
+    return requestDesktopAiGeneration(request, options.signal).catch((error) => {
+      throw new Error(getSafeErrorMessage(error, `${providerLabel} 请求失败。`));
+    });
+  }
   const timeout = createTimeoutSignal(options.signal, timeoutMs);
   try {
-    const response = await fetch(buildEndpoint(effective.baseUrl), {
+    const browserRequest = buildBrowserAiRequest(request, false);
+    const response = await fetch(request.endpoint, {
       method: "POST",
       signal: timeout.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${effective.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: effective.model,
-        messages,
-        stream: false,
-        temperature: 0.2,
-        max_tokens: options.maxTokens ?? 1200,
-      }),
+      headers: browserRequest.headers,
+      body: JSON.stringify(browserRequest.body),
     });
 
-    const data = (await response.json().catch(() => ({}))) as ChatCompletionResponse;
-    const content = data.choices?.[0]?.message?.content?.trim();
+    const data = (await response.json().catch(() => ({}))) as ChatCompletionResponse | AnthropicMessageResponse | OpenAiResponsesResponse;
+    const content = extractBrowserCompletionContent(request.protocol, data);
 
     if (!response.ok) {
       throw new Error(getSafeErrorMessage(data.error?.message, `${providerLabel} 请求失败：HTTP ${response.status}`));
+    }
+
+    if (request.protocol === "openai-responses") {
+      const responses = data as OpenAiResponsesResponse;
+      if (responses.status === "failed") throw new Error(responses.error?.message || `${providerLabel} 请求失败。`);
+      if (responses.status === "incomplete") {
+        throw new Error(responses.incomplete_details?.reason || `${providerLabel} 返回未完成。`);
+      }
     }
 
     if (!content) {
@@ -712,22 +1086,20 @@ async function callDeepSeekStream(
   }
 
   const timeoutMs = options.timeoutMs ?? AI_STREAM_TIMEOUT_MS;
+  const request = createAiGenerateRequest(effective, messages, options.maxTokens ?? 1600, timeoutMs);
+  if (hasDesktopAiTransport()) {
+    return streamDesktopAiGeneration(request, onToken, options.signal).catch((error) => {
+      throw new Error(getSafeErrorMessage(error, `${providerLabel} 流式请求失败。`));
+    });
+  }
   const timeout = createTimeoutSignal(options.signal, timeoutMs);
   try {
-    const response = await fetch(buildEndpoint(effective.baseUrl), {
+    const browserRequest = buildBrowserAiRequest(request, true);
+    const response = await fetch(request.endpoint, {
       method: "POST",
       signal: timeout.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${effective.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: effective.model,
-        messages,
-        stream: true,
-        temperature: 0.2,
-        max_tokens: options.maxTokens ?? 1600,
-      }),
+      headers: browserRequest.headers,
+      body: JSON.stringify(browserRequest.body),
     });
 
     if (!response.ok) {
@@ -759,12 +1131,13 @@ async function callDeepSeekStream(
         const payload = trimmed.slice(5).trim();
         if (!payload || payload === "[DONE]") continue;
 
-        const parsed = JSON.parse(payload) as ChatCompletionStreamChunk;
-        if (parsed.error?.message) {
-          throw new Error(getSafeErrorMessage(parsed.error.message, `${providerLabel} 流式请求失败。`));
+        const parsed = JSON.parse(payload) as ChatCompletionStreamChunk | AnthropicStreamEvent | OpenAiResponsesStreamEvent;
+        let token = "";
+        try {
+          token = extractBrowserStreamToken(request.protocol, parsed, Boolean(fullText));
+        } catch (error) {
+          throw new Error(getSafeErrorMessage(error, `${providerLabel} 流式请求失败。`));
         }
-
-        const token = parsed.choices?.[0]?.delta?.content ?? "";
         if (!token) continue;
 
         fullText += token;

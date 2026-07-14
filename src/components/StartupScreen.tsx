@@ -96,7 +96,7 @@ export function StartupScreen({ ready, onComplete }: StartupScreenProps) {
       <div className="startup-screen-content" aria-hidden="true">
         <Layers3 className="startup-screen-icon" size={30} strokeWidth={1.45} />
         <div className="startup-screen-brand">DAYMARK</div>
-        <div className="startup-screen-tagline">把今天留下，让明天找得到。</div>
+        <div className="startup-screen-tagline">悟已往之不谏，知来者之可追</div>
       </div>
     </section>
   );

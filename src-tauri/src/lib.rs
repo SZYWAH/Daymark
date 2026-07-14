@@ -1,4 +1,5 @@
 mod ai_secrets;
+mod ai_transport;
 mod conversation_sessions;
 mod file_commands;
 mod main_window_state;
@@ -9,7 +10,7 @@ use quick_capture::{
     close_quick_capture_panel_from_escape, current_panel_is_saving, current_panel_token_option,
     dispatch_quick_capture_on_main, hide_main, hide_quick_capture_panel_impl,
     hide_quick_capture_window, hide_quick_capture_windows, main_is_available_for_hotzone,
-    prewarm_quick_capture_windows, quick_capture_degraded,
+    load_quick_capture_preferences, prewarm_quick_capture_windows, quick_capture_degraded,
     quick_capture_escape_shortcut, quick_capture_panel_is_active, quick_capture_panel_should_be_preserved,
     quick_capture_paused, reconcile_quick_capture_window_destroyed,
     remember_primary_quick_capture_monitor, route_second_launch_to_main,
@@ -135,12 +136,16 @@ mod tests {
     fn ai_key_account_scopes_provider_and_base_url() {
         let deepseek = ai_api_key_account("deepseek", "https://api.example.test").unwrap();
         let compatible = ai_api_key_account("openai-compatible", "https://api.example.test").unwrap();
+        let anthropic = ai_api_key_account("anthropic-messages", "https://api.example.test").unwrap();
         let other_url = ai_api_key_account("deepseek", "https://other.example.test").unwrap();
 
         assert_ne!(deepseek, compatible);
         assert_ne!(deepseek, other_url);
+        assert_ne!(deepseek, anthropic);
+        assert_ne!(compatible, anthropic);
         assert!(deepseek.starts_with("deepseek:"));
         assert!(compatible.starts_with("openai-compatible:"));
+        assert!(anthropic.starts_with("anthropic-messages:"));
     }
 
     #[test]
@@ -230,6 +235,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            load_quick_capture_preferences(app.handle());
             if let Err(error) = main_window_state::prepare_main_window(app) {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.center();
@@ -353,6 +359,10 @@ pub fn run() {
             ai_secrets::read_ai_api_key,
             ai_secrets::write_ai_api_key,
             ai_secrets::delete_ai_api_key,
+            ai_transport::ai_generate,
+            ai_transport::ai_generate_stream,
+            ai_transport::list_ai_models,
+            ai_transport::cancel_ai_request,
             file_commands::get_supported_file_analysis_types,
             file_commands::extract_local_file_text,
             file_commands::get_supported_vision_types,
@@ -384,6 +394,8 @@ pub fn run() {
             quick_capture::quick_capture_window_ready,
             quick_capture::get_quick_capture_panel_token,
             quick_capture::get_quick_capture_runtime_state,
+            quick_capture::get_quick_capture_top_entry_enabled,
+            quick_capture::set_quick_capture_top_entry_enabled,
             quick_capture::finalize_quick_capture_drag,
             quick_capture::collapse_quick_capture_if_pointer_outside,
             quick_capture::set_quick_capture_saving,

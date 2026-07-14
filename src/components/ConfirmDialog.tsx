@@ -7,9 +7,11 @@ type ConfirmDialogProps = {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  secondaryLabel?: string;
   danger?: boolean;
   onCancel: () => void;
   onConfirm: () => Promise<void> | void;
+  onSecondary?: () => Promise<void> | void;
 };
 
 export function ConfirmDialog({
@@ -18,9 +20,11 @@ export function ConfirmDialog({
   message,
   confirmLabel = "确认",
   cancelLabel = "取消",
+  secondaryLabel,
   danger = false,
   onCancel,
   onConfirm,
+  onSecondary,
 }: ConfirmDialogProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -43,12 +47,12 @@ export function ConfirmDialog({
 
   if (!open) return null;
 
-  const confirm = async () => {
+  const runAction = async (action: () => Promise<void> | void) => {
     if (busy) return;
     setBusy(true);
     setError("");
     try {
-      await onConfirm();
+      await action();
     } catch (confirmError) {
       setError(confirmError instanceof Error ? confirmError.message : "操作失败，请稍后再试。");
     } finally {
@@ -95,10 +99,15 @@ export function ConfirmDialog({
           <button className="secondary-action action-standard" disabled={busy} onClick={onCancel}>
             {cancelLabel}
           </button>
+          {secondaryLabel && onSecondary && (
+            <button className="secondary-action action-standard" disabled={busy} onClick={() => void runAction(onSecondary)}>
+              {secondaryLabel}
+            </button>
+          )}
           <button
             className={`${danger ? "danger-action" : "primary-button"} action-standard`}
             disabled={busy}
-            onClick={() => void confirm()}
+            onClick={() => void runAction(onConfirm)}
           >
             <Check size={15} />
             {busy ? "处理中" : confirmLabel}

@@ -1,5 +1,6 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
+use std::fs;
 use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -27,14 +28,16 @@ use windows_sys::Win32::{
 pub(crate) const QUICK_CAPTURE_HOTZONE_LABEL: &str = "quick-capture-hotzone";
 pub(crate) const QUICK_CAPTURE_PANEL_LABEL: &str = "quick-capture-panel";
 const QUICK_CAPTURE_HOT_WIDTH: u32 = 560;
-const QUICK_CAPTURE_HOT_HEIGHT: u32 = 10;
+const QUICK_CAPTURE_HOT_HEIGHT: u32 = 16;
 const QUICK_CAPTURE_PANEL_WIDTH: u32 = 680;
 const QUICK_CAPTURE_PANEL_HEIGHT: u32 = 220;
 const QUICK_CAPTURE_EDGE_MARGIN: f64 = 24.0;
 const QUICK_CAPTURE_DETACHED_TOP_THRESHOLD: f64 = 48.0;
 const QUICK_CAPTURE_READY_TIMEOUT_MS: u64 = 1_500;
 const QUICK_CAPTURE_MAX_OPEN_FAILURES: u8 = 2;
-const HOTZONE_HOVER_DELAY_MS: u64 = 240;
+const HOTZONE_SENSOR_HEIGHT: f64 = 3.0;
+const HOTZONE_HOVER_DELAY_MS: u64 = 180;
+const HOTZONE_HIDE_DELAY_MS: u64 = 500;
 const QUICK_CAPTURE_HOTZONE_POLL_INTERVAL_MS: u64 = 80;
 const QUICK_CAPTURE_ESCAPE_FALLBACK_MS: u64 = 620;
 
@@ -65,6 +68,7 @@ static QUICK_CAPTURE_ESCAPE_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::n
 static QUICK_CAPTURE_PANEL_SOFT_RETRIES: OnceLock<Mutex<BTreeMap<u64, u8>>> = OnceLock::new();
 static QUICK_CAPTURE_HOTZONE_SOFT_RETRIES: OnceLock<Mutex<BTreeMap<u64, u8>>> = OnceLock::new();
 static QUICK_CAPTURE_LIFECYCLE_SYNC_PENDING: AtomicBool = AtomicBool::new(false);
+static QUICK_CAPTURE_TRAY_TOGGLE_ITEM: OnceLock<MenuItem<tauri::Wry>> = OnceLock::new();
 #[cfg(target_os = "windows")]
 static QUICK_CAPTURE_ESCAPE_HOOK_STARTED: OnceLock<()> = OnceLock::new();
 #[cfg(target_os = "windows")]
@@ -73,6 +77,24 @@ static QUICK_CAPTURE_ESCAPE_POLL_STARTED: OnceLock<()> = OnceLock::new();
 static QUICK_CAPTURE_ESCAPE_HOOK_ARMED: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "windows")]
 static QUICK_CAPTURE_ESCAPE_HOOK_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+const QUICK_CAPTURE_PREFERENCES_FILE: &str = "quick-capture-preferences-v1.json";
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuickCapturePreferencesV1 {
+    version: u8,
+    top_entry_enabled: bool,
+}
+
+impl Default for QuickCapturePreferencesV1 {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            top_entry_enabled: true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum QuickCaptureState {
@@ -214,6 +236,67 @@ fn set_quick_capture_paused(paused: bool) {
         .get_or_init(|| Mutex::new(false))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = paused;
+}
+
+fn quick_capture_preferences_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let directory = app.path().app_config_dir().map_err(|error| error.to_string())?;
+    Ok(directory.join(QUICK_CAPTURE_PREFERENCES_FILE))
+}
+
+fn save_quick_capture_preferences(app: &AppHandle) -> Result<(), String> {
+    let path = quick_capture_preferences_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let preferences = QuickCapturePreferencesV1 {
+        version: 1,
+        top_entry_enabled: !quick_capture_paused(),
+    };
+    let contents = serde_json::to_vec_pretty(&preferences).map_err(|error| error.to_string())?;
+    fs::write(path, contents).map_err(|error| error.to_string())
+}
+
+fn update_quick_capture_tray_toggle_label() {
+    let Some(item) = QUICK_CAPTURE_TRAY_TOGGLE_ITEM.get() else {
+        return;
+    };
+    let label = if quick_capture_paused() {
+        "恢复顶部快速记录入口"
+    } else {
+        "暂停顶部快速记录入口"
+    };
+    let _ = item.set_text(label);
+}
+
+pub(crate) fn load_quick_capture_preferences(app: &AppHandle) {
+    let preferences = quick_capture_preferences_path(app)
+        .ok()
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|contents| serde_json::from_slice::<QuickCapturePreferencesV1>(&contents).ok())
+        .filter(|preferences| preferences.version == 1)
+        .unwrap_or_default();
+    set_quick_capture_paused(!preferences.top_entry_enabled);
+}
+
+fn apply_top_entry_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    set_quick_capture_paused(!enabled);
+    save_quick_capture_preferences(app)?;
+    update_quick_capture_tray_toggle_label();
+
+    if enabled {
+        clear_quick_capture_degraded();
+        if !quick_capture_panel_is_active() && !main_is_available_for_hotzone(app) {
+            show_quick_capture_hotzone_for_hidden_main_impl(app)?;
+        } else if !quick_capture_panel_is_active() {
+            set_quick_capture_state(QuickCaptureState::MainVisible);
+        }
+    } else if quick_capture_panel_should_be_preserved(app) {
+        hide_quick_capture_window(app, QUICK_CAPTURE_HOTZONE_LABEL);
+    } else {
+        set_quick_capture_state(QuickCaptureState::Paused);
+        hide_quick_capture_windows(app);
+    }
+    Ok(())
 }
 
 fn quick_capture_state_store() -> &'static Mutex<QuickCaptureState> {
@@ -1268,7 +1351,7 @@ pub(crate) fn main_is_available_for_hotzone(app: &AppHandle) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn cursor_in_quick_capture_hotzone(app: &AppHandle) -> bool {
+fn cursor_in_quick_capture_area(app: &AppHandle, height: f64) -> bool {
     if quick_capture_monitor_store()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1289,7 +1372,7 @@ fn cursor_in_quick_capture_hotzone(app: &AppHandle) -> bool {
     }
 
     let hot_width = QUICK_CAPTURE_HOT_WIDTH as f64 * monitor.scale_factor;
-    let hot_height = (QUICK_CAPTURE_HOT_HEIGHT as f64).max(14.0) * monitor.scale_factor;
+    let hot_height = height * monitor.scale_factor;
     let left = anchored_x(
         monitor.physical_x,
         monitor.physical_width,
@@ -1302,6 +1385,32 @@ fn cursor_in_quick_capture_hotzone(app: &AppHandle) -> bool {
     let right = left.saturating_add(hot_width.round() as i32);
     let bottom = top.saturating_add(hot_height.round() as i32);
     cursor.x >= left && cursor.x < right && cursor.y >= top && cursor.y < bottom
+}
+
+#[cfg(target_os = "windows")]
+fn cursor_in_quick_capture_sensor(app: &AppHandle) -> bool {
+    cursor_in_quick_capture_area(app, HOTZONE_SENSOR_HEIGHT)
+}
+
+#[cfg(target_os = "windows")]
+fn cursor_in_quick_capture_hotzone(app: &AppHandle) -> bool {
+    cursor_in_quick_capture_area(app, QUICK_CAPTURE_HOT_HEIGHT as f64)
+}
+
+fn set_hotzone_launcher_visible(app: &AppHandle, token: u64, visible: bool) {
+    if current_hotzone_open_token() != token || quick_capture_state() != QuickCaptureState::HotzoneVisible {
+        return;
+    }
+    let Some(hotzone) = app.get_webview_window(QUICK_CAPTURE_HOTZONE_LABEL) else {
+        return;
+    };
+    let _ = hotzone.set_ignore_cursor_events(!visible);
+    let event = if visible {
+        "quick-capture:hotzone-show"
+    } else {
+        "quick-capture:hotzone-hide"
+    };
+    hotzone.emit(event, token).ok();
 }
 
 #[cfg(target_os = "windows")]
@@ -1318,33 +1427,47 @@ fn schedule_hotzone_cursor_watch(app: AppHandle, token: u64) {
 
     thread::spawn(move || {
         let mut inside_since: Option<Instant> = None;
+        let mut outside_since: Option<Instant> = None;
+        let mut launcher_visible = false;
         loop {
             if current_hotzone_open_token() != token || quick_capture_state() != QuickCaptureState::HotzoneVisible {
                 break;
             }
 
             if quick_capture_hotzone_reopen_suppressed() {
-                if !cursor_in_quick_capture_hotzone(&app) {
+                if !cursor_in_quick_capture_sensor(&app) {
                     clear_quick_capture_hotzone_reopen_suppression();
                 }
                 inside_since = None;
+                outside_since = None;
                 thread::sleep(Duration::from_millis(QUICK_CAPTURE_HOTZONE_POLL_INTERVAL_MS));
                 continue;
             }
 
-            if cursor_in_quick_capture_hotzone(&app) {
+            if launcher_visible {
+                if cursor_in_quick_capture_hotzone(&app) {
+                    outside_since = None;
+                } else {
+                    let left_at = outside_since.get_or_insert_with(Instant::now);
+                    if left_at.elapsed() >= Duration::from_millis(HOTZONE_HIDE_DELAY_MS) {
+                        run_quick_capture_on_main(&app, move |app_handle| {
+                            set_hotzone_launcher_visible(&app_handle, token, false);
+                        });
+                        launcher_visible = false;
+                        inside_since = None;
+                        outside_since = None;
+                    }
+                }
+            } else if cursor_in_quick_capture_sensor(&app) {
                 let entered_at = inside_since.get_or_insert_with(Instant::now);
                 if entered_at.elapsed() >= Duration::from_millis(HOTZONE_HOVER_DELAY_MS) {
                     if current_hotzone_open_token() == token {
                         run_quick_capture_on_main(&app, move |app_handle| {
-                            if current_hotzone_open_token() == token
-                                && quick_capture_state() == QuickCaptureState::HotzoneVisible
-                            {
-                                let _ = show_quick_capture_panel_impl(&app_handle);
-                            }
+                            set_hotzone_launcher_visible(&app_handle, token, true);
                         });
                     }
-                    break;
+                    launcher_visible = true;
+                    inside_since = None;
                 }
             } else {
                 inside_since = None;
@@ -1590,7 +1713,7 @@ fn schedule_hotzone_ready_watchdog(app: AppHandle, token: u64) {
                 && quick_capture_window_visible(&app_handle, QUICK_CAPTURE_HOTZONE_LABEL)
             {
                 if let Some(hotzone) = app_handle.get_webview_window(QUICK_CAPTURE_HOTZONE_LABEL) {
-                    hotzone.emit("quick-capture:hotzone-show", token).ok();
+                    hotzone.emit("quick-capture:hotzone-probe", token).ok();
                 }
             }
         });
@@ -1695,7 +1818,8 @@ pub(crate) fn show_quick_capture_hotzone_impl_with(app: &AppHandle, force_hidden
         let token = current_hotzone_open_token();
         if quick_capture_window_visible(app, QUICK_CAPTURE_HOTZONE_LABEL) {
             if let Some(hotzone) = app.get_webview_window(QUICK_CAPTURE_HOTZONE_LABEL) {
-                hotzone.emit("quick-capture:hotzone-show", token).ok();
+                let _ = hotzone.set_ignore_cursor_events(true);
+                hotzone.emit("quick-capture:hotzone-probe", token).ok();
             }
             schedule_hotzone_cursor_watch(app.clone(), token);
             schedule_hotzone_ready_watchdog(app.clone(), token);
@@ -1759,7 +1883,8 @@ pub(crate) fn show_quick_capture_hotzone_impl_with(app: &AppHandle, force_hidden
         return Ok(());
     }
     set_quick_capture_state(QuickCaptureState::HotzoneVisible);
-    hotzone.emit("quick-capture:hotzone-show", hotzone_token).ok();
+    let _ = hotzone.set_ignore_cursor_events(true);
+    hotzone.emit("quick-capture:hotzone-probe", hotzone_token).ok();
     schedule_hotzone_cursor_watch(app.clone(), hotzone_token);
     schedule_hotzone_ready_watchdog(app.clone(), hotzone_token);
     Ok(())
@@ -2095,7 +2220,7 @@ fn sync_quick_capture_lifecycle_on_main(app: &AppHandle) {
                     if let Some(hotzone) = app_handle.get_webview_window(QUICK_CAPTURE_HOTZONE_LABEL) {
                         let token = current_hotzone_open_token();
                         if token != 0 {
-                            hotzone.emit("quick-capture:hotzone-show", token).ok();
+                            hotzone.emit("quick-capture:hotzone-probe", token).ok();
                         }
                     }
                 } else {
@@ -2144,7 +2269,7 @@ fn sync_quick_capture_lifecycle_on_main(app: &AppHandle) {
             let token = current_hotzone_open_token();
             if token != 0 {
                 if let Some(hotzone) = app_handle.get_webview_window(QUICK_CAPTURE_HOTZONE_LABEL) {
-                    hotzone.emit("quick-capture:hotzone-show", token).ok();
+                    hotzone.emit("quick-capture:hotzone-probe", token).ok();
                 }
                 schedule_hotzone_cursor_watch(app_handle.clone(), token);
                 schedule_hotzone_ready_watchdog(app_handle.clone(), token);
@@ -2327,6 +2452,22 @@ pub(crate) fn get_quick_capture_runtime_state() -> QuickCaptureRuntimeState {
 }
 
 #[tauri::command]
+pub(crate) fn get_quick_capture_top_entry_enabled(window: WebviewWindow) -> Result<bool, String> {
+    ensure_main_window(&window)?;
+    Ok(!quick_capture_paused())
+}
+
+#[tauri::command]
+pub(crate) fn set_quick_capture_top_entry_enabled(
+    window: WebviewWindow,
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    ensure_main_window(&window)?;
+    apply_top_entry_enabled(&app, enabled)
+}
+
+#[tauri::command]
 pub(crate) fn finalize_quick_capture_drag(
     window: WebviewWindow,
     app: AppHandle,
@@ -2449,7 +2590,13 @@ pub(crate) fn notify_quick_capture_saved(window: WebviewWindow, app: AppHandle, 
 pub(crate) fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open = MenuItem::with_id(app, "open-main", "打开 Daymark", true, None::<&str>)?;
     let quick = MenuItem::with_id(app, "quick-capture", "快速记录 Ctrl+Shift+Space", true, None::<&str>)?;
-    let pause = MenuItem::with_id(app, "toggle-quick-capture", "暂停/恢复顶部悬浮", true, None::<&str>)?;
+    let pause_label = if quick_capture_paused() {
+        "恢复顶部快速记录入口"
+    } else {
+        "暂停顶部快速记录入口"
+    };
+    let pause = MenuItem::with_id(app, "toggle-quick-capture", pause_label, true, None::<&str>)?;
+    let _ = QUICK_CAPTURE_TRAY_TOGGLE_ITEM.set(pause.clone());
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quick, &pause, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main-tray")
@@ -2469,21 +2616,8 @@ pub(crate) fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error:
             }
             "toggle-quick-capture" => {
                 dispatch_quick_capture_on_main(app, |app_handle| {
-                    let paused = !quick_capture_paused();
-                    set_quick_capture_paused(paused);
-                    if paused {
-                        set_quick_capture_state(QuickCaptureState::Paused);
-                        hide_quick_capture_windows(&app_handle);
-                    } else {
-                        clear_quick_capture_degraded();
-                        if quick_capture_panel_is_active() {
-                            // Keep the explicit quick-capture panel where the user left it.
-                        } else if !main_is_available_for_hotzone(&app_handle) {
-                            let _ = show_quick_capture_hotzone_for_hidden_main_impl(&app_handle);
-                        } else {
-                            set_quick_capture_state(QuickCaptureState::MainVisible);
-                        }
-                    }
+                    let enabled = quick_capture_paused();
+                    let _ = apply_top_entry_enabled(&app_handle, enabled);
                 });
             }
             "quit" => {
@@ -2516,7 +2650,7 @@ pub(crate) fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error:
 mod tests {
     use super::{
         anchor_for_panel_center, anchored_x, is_panel_detached, panel_token_matches,
-        QuickCaptureAnchor,
+        QuickCaptureAnchor, QuickCapturePreferencesV1,
     };
 
     #[test]
@@ -2554,5 +2688,16 @@ mod tests {
         assert!(!panel_token_matches(Some(7), 8));
         assert!(!panel_token_matches(Some(0), 0));
         assert!(!panel_token_matches(None, 8));
+    }
+
+    #[test]
+    fn top_entry_preferences_default_to_enabled_and_round_trip() {
+        let defaults = QuickCapturePreferencesV1::default();
+        assert!(defaults.top_entry_enabled);
+
+        let encoded = serde_json::to_string(&defaults).unwrap();
+        let decoded: QuickCapturePreferencesV1 = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.version, 1);
+        assert!(decoded.top_entry_enabled);
     }
 }

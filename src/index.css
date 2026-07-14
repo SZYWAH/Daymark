@@ -978,38 +978,49 @@ button {
   }
 
   .quick-capture-hotzone-screen {
-    @apply flex h-screen w-screen items-start justify-center overflow-hidden;
+    @apply flex h-screen w-screen items-start justify-center overflow-hidden transition-opacity duration-150;
     background: transparent;
+  }
+
+  .quick-capture-hotzone-hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .quick-capture-hotzone-visible {
+    opacity: 1;
   }
 
   .quick-capture-hotzone-pill {
-    @apply relative h-[10px] w-full max-w-full overflow-hidden rounded-b-[8px] border-0 p-0 outline-none;
-    background: transparent;
+    @apply relative flex h-4 w-full max-w-full items-center justify-center overflow-hidden rounded-b-[7px] border border-t-0 border-white/[0.08] outline-none transition;
+    background: rgba(18, 18, 18, 0.65);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   }
 
   .quick-capture-hotzone-pill::before {
-    content: "";
-    @apply absolute left-1/2 top-0 h-px w-[42%] -translate-x-1/2 rounded-full bg-white/[0.035] opacity-[0.12] transition;
+    content: none;
   }
 
   .quick-capture-hotzone-pill::after {
     content: none;
   }
 
-  .quick-capture-hotzone-pill:hover::before,
-  .quick-capture-hotzone-pill:focus-visible::before {
-    @apply w-[66%] bg-white/[0.07] opacity-[0.28];
+  .quick-capture-hotzone-pill:hover,
+  .quick-capture-hotzone-pill:focus-visible {
+    @apply border-white/[0.15];
+    background: rgba(28, 28, 28, 0.80);
   }
 
-  :root[data-theme="light"] .quick-capture-hotzone-pill::before {
-    background: rgba(22, 28, 34, 0.12);
-    opacity: 0.18;
+  :root[data-theme="light"] .quick-capture-hotzone-pill {
+    border-color: rgba(22, 28, 34, 0.10);
+    background: rgba(248, 248, 246, 0.65);
+    box-shadow: 0 4px 12px rgba(22, 28, 34, 0.05);
   }
 
-  :root[data-theme="light"] .quick-capture-hotzone-pill:hover::before,
-  :root[data-theme="light"] .quick-capture-hotzone-pill:focus-visible::before {
-    background: rgba(22, 28, 34, 0.18);
-    opacity: 0.32;
+  :root[data-theme="light"] .quick-capture-hotzone-pill:hover,
+  :root[data-theme="light"] .quick-capture-hotzone-pill:focus-visible {
+    border-color: rgba(22, 28, 34, 0.17);
+    background: rgba(255, 255, 253, 0.80);
   }
 
   .quick-capture-hotzone-glow {

@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-const appVersion = "0.1.0-rc.4";
+import packageJson from "./package.json";
+
+const appVersion = packageJson.version;
 
 export default defineConfig({
   base: "./",

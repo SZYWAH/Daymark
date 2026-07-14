@@ -43,7 +43,7 @@ export function normalizeAiBaseUrl(value: string) {
 }
 
 export function getAiSecretScope(settings: Pick<AiSettings, "provider" | "baseUrl">) {
-  const provider = settings.provider === "openai-compatible" ? "openai-compatible" : "deepseek";
+  const provider = normalizeAiProvider(settings.provider);
   return `${provider}:${normalizeAiBaseUrl(settings.baseUrl)}`;
 }
 
@@ -193,12 +193,13 @@ async function deleteStoredAiApiKey(settings: Pick<AiSettings, "provider" | "bas
 }
 
 function normalizeAiProvider(provider: AiProvider): AiProvider {
-  return provider === "openai-compatible" ? "openai-compatible" : "deepseek";
+  if (provider === "openai-compatible" || provider === "anthropic-messages") return provider;
+  return "deepseek";
 }
 
 function hasDeepSeekEnvKey(settings: AiSettings) {
   return (
-    settings.provider !== "openai-compatible" &&
+    settings.provider === "deepseek" &&
     settings.useEnvKey &&
     Boolean(import.meta.env.VITE_DEEPSEEK_API_KEY?.trim())
   );

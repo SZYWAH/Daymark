@@ -32,6 +32,7 @@ const QUICK_CAPTURE_DIRTY_KEY = "personal-knowledge-base:quick-capture-dirty:v1"
 export function QuickCaptureHotzoneWindow() {
   const openingRef = useRef(false);
   const readyTokenRef = useRef(0);
+  const [visible, setVisible] = useState(false);
 
   useQuickCaptureDocument("quick-capture-hotzone");
 
@@ -39,6 +40,7 @@ export function QuickCaptureHotzoneWindow() {
     let disposed = false;
     let unlistenHotzoneShow: (() => void) | undefined;
     let unlistenHotzoneHide: (() => void) | undefined;
+    let unlistenHotzoneProbe: (() => void) | undefined;
     const reportHotzoneToken = async (token: number) => {
       if (!token) return;
       readyTokenRef.current = token;
@@ -68,6 +70,7 @@ export function QuickCaptureHotzoneWindow() {
     if (isDesktopRuntime()) {
       void listen<number>("quick-capture:hotzone-show", (event) => {
         applyThemeMode();
+        setVisible(true);
         void reportHotzoneToken(event.payload).catch(() => undefined);
       }).then((handler) => {
         if (disposed) {
@@ -79,7 +82,7 @@ export function QuickCaptureHotzoneWindow() {
 
       void listen<number>("quick-capture:hotzone-hide", (event) => {
         if (event.payload && readyTokenRef.current && event.payload !== readyTokenRef.current) return;
-        readyTokenRef.current = 0;
+        setVisible(false);
         openingRef.current = false;
       }).then((handler) => {
         if (disposed) {
@@ -88,12 +91,23 @@ export function QuickCaptureHotzoneWindow() {
         }
         unlistenHotzoneHide = handler;
       }).catch(() => undefined);
+
+      void listen<number>("quick-capture:hotzone-probe", (event) => {
+        void reportHotzoneToken(event.payload).catch(() => undefined);
+      }).then((handler) => {
+        if (disposed) {
+          handler();
+          return;
+        }
+        unlistenHotzoneProbe = handler;
+      }).catch(() => undefined);
     }
 
     return () => {
       disposed = true;
       unlistenHotzoneShow?.();
       unlistenHotzoneHide?.();
+      unlistenHotzoneProbe?.();
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timer);
       window.clearTimeout(lateTimer);
@@ -126,7 +140,7 @@ export function QuickCaptureHotzoneWindow() {
 
   return (
     <main
-      className="quick-capture-hotzone-screen"
+      className={`quick-capture-hotzone-screen ${visible ? "quick-capture-hotzone-visible" : "quick-capture-hotzone-hidden"}`}
       onClick={() => openFromHotzone("click")}
     >
       <button
@@ -139,7 +153,7 @@ export function QuickCaptureHotzoneWindow() {
         }}
         title="打开快速记录"
       >
-        <span className="quick-capture-hotzone-glow" />
+        <span className="sr-only">打开快速记录</span>
       </button>
     </main>
   );

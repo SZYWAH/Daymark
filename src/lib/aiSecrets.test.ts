@@ -4,6 +4,7 @@ import { getDefaultAiSettings, getAiSettings, saveAiSettings } from "../data/ite
 import type { AiProvider } from "../types";
 import {
   normalizeAiBaseUrl,
+  getAiSecretScope,
   loadAiSettingsWithSecrets,
   resolveAiSettingsForRequest,
   saveAiSettingsWithSecrets,
@@ -107,6 +108,13 @@ describe("AI secret storage", () => {
       baseUrl: "https://api.two.test/v1",
       manualApiKey: "sk-two-123456",
     });
+    await saveAiSettingsWithSecrets({
+      ...getDefaultAiSettings(),
+      provider: "anthropic-messages",
+      useEnvKey: false,
+      baseUrl: "https://api.anthropic.com",
+      manualApiKey: "sk-ant-three-123456",
+    });
 
     const resolvedOne = await resolveAiSettingsForRequest({
       ...getDefaultAiSettings(),
@@ -122,9 +130,17 @@ describe("AI secret storage", () => {
       baseUrl: "https://api.two.test/v1/",
       manualKeyStored: true,
     });
+    const resolvedThree = await resolveAiSettingsForRequest({
+      ...getDefaultAiSettings(),
+      provider: "anthropic-messages",
+      useEnvKey: false,
+      baseUrl: "https://api.anthropic.com/",
+      manualKeyStored: true,
+    });
 
     expect(resolvedOne.manualApiKey).toBe("sk-one-123456");
     expect(resolvedTwo.manualApiKey).toBe("sk-two-123456");
+    expect(resolvedThree.manualApiKey).toBe("sk-ant-three-123456");
   });
 
   it("clears only the current provider and Base URL key", async () => {
@@ -152,6 +168,64 @@ describe("AI secret storage", () => {
     expect(saved.manualKeyStored).toBe(false);
     expect(secrets.has(secretId("deepseek", "https://api.one.test"))).toBe(false);
     expect(secrets.get(secretId("deepseek", "https://api.two.test"))).toBe("sk-two-123456");
+  });
+
+  it("persists Anthropic provider and authentication mode without changing the database schema", async () => {
+    await saveAiSettings({
+      ...getDefaultAiSettings(),
+      provider: "anthropic-messages",
+      anthropicAuthMode: "bearer",
+      useEnvKey: false,
+      baseUrl: "https://gateway.example.test/anthropic",
+      model: "claude-sonnet-4-6",
+    });
+
+    const stored = await getAiSettings();
+    expect(stored.provider).toBe("anthropic-messages");
+    expect(stored.anthropicAuthMode).toBe("bearer");
+    expect(stored.baseUrl).toBe("https://gateway.example.test/anthropic");
+  });
+
+  it("shares one key across OpenAI protocols at the same Base URL", async () => {
+    await saveAiSettingsWithSecrets({
+      ...getDefaultAiSettings(),
+      provider: "openai-compatible",
+      protocol: "openai-responses",
+      useEnvKey: false,
+      baseUrl: "https://gateway.example.test/v1",
+      manualApiKey: "sk-openai-shared-123456",
+    });
+
+    const resolved = await resolveAiSettingsForRequest({
+      ...getDefaultAiSettings(),
+      provider: "openai-compatible",
+      protocol: "openai-chat-completions",
+      useEnvKey: false,
+      baseUrl: "https://gateway.example.test/v1/",
+      manualKeyStored: true,
+    });
+
+    expect(resolved.manualApiKey).toBe("sk-openai-shared-123456");
+    expect(secrets.size).toBe(1);
+  });
+
+  it("keeps credential scope stable across model and display-name changes", () => {
+    const base = {
+      provider: "openai-compatible" as const,
+      baseUrl: "https://gateway.example.test/v1/",
+    };
+    expect(getAiSecretScope(base)).toBe(getAiSecretScope({
+      ...base,
+      baseUrl: "https://GATEWAY.example.test/v1",
+    }));
+    expect(getAiSecretScope(base)).not.toBe(getAiSecretScope({
+      ...base,
+      baseUrl: "https://other.example.test/v1",
+    }));
+    expect(getAiSecretScope(base)).not.toBe(getAiSecretScope({
+      provider: "anthropic-messages",
+      baseUrl: base.baseUrl,
+    }));
   });
 });
 

@@ -26,7 +26,7 @@ import { JournalPage } from "./components/JournalPage";
 import { LibrarySmartToolbar } from "./components/LibrarySmartToolbar";
 import { MemoryPage } from "./components/MemoryPage";
 import { SearchPage } from "./components/SearchPage";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsPanel, type SettingsPanelHandle } from "./components/SettingsPanel";
 import { MobileGlobalNav, Sidebar } from "./components/Sidebar";
 import { MainWindowTitleBar } from "./components/MainWindowTitleBar";
 import { StartupScreen } from "./components/StartupScreen";
@@ -248,10 +248,13 @@ type PendingConfirm = {
   title: string;
   message: string;
   confirmLabel: string;
+  cancelLabel?: string;
+  secondaryLabel?: string;
   danger?: boolean;
   closeBeforeRun?: boolean;
   onCancel?: () => void;
   onConfirm: () => Promise<void>;
+  onSecondary?: () => Promise<void>;
 };
 
 type FolderPromptState =
@@ -614,6 +617,7 @@ export default function App() {
   const reviewGenerationRunningRef = useRef(new Set<string>());
   const autoWorkReviewRunningRef = useRef(false);
   const settingsRef = useRef<AiSettings | null>(null);
+  const settingsPanelRef = useRef<SettingsPanelHandle | null>(null);
   const autoWorkReviewSettingsRef = useRef<AutoWorkReviewSettings | null>(null);
 
   const aiConfigured = Boolean(settings && getEffectiveAiSettings(settings).keySource !== "missing");
@@ -1195,13 +1199,9 @@ export default function App() {
     setLayout(DEFAULT_LAYOUT_STATE);
   };
 
-  const blockUnsavedWorkNavigation = (nextView?: ActiveView) => {
+  const blockUnsavedWorkNavigation = () => {
     if (editorDirty) {
       setError("资料编辑还没有保存。请先保存，或在编辑弹窗里再次关闭以放弃修改。");
-      return true;
-    }
-    if (activeView.kind === "settings" && nextView?.kind !== "settings" && settingsDirty) {
-      setError("设置页有未保存修改。请先保存，再离开设置。");
       return true;
     }
     return false;
@@ -1213,8 +1213,7 @@ export default function App() {
     return true;
   };
 
-  const handleSelectView = (view: ActiveView) => {
-    if (blockUnsavedWorkNavigation(view)) return false;
+  const selectViewNow = (view: ActiveView) => {
     if (view.kind === "memory" && !view.subView) {
       setActiveView({ kind: "memory", subView: "document" });
     } else {
@@ -1230,6 +1229,32 @@ export default function App() {
     setDraft(null);
     setAiRunState(null);
     return true;
+  };
+
+  const handleSelectView = (view: ActiveView) => {
+    if (blockUnsavedWorkNavigation()) return false;
+    if (activeView.kind === "settings" && view.kind !== "settings" && settingsDirty) {
+      setPendingConfirm({
+        title: "离开设置？",
+        message: "AI 服务配置还有未保存的修改。你可以先保存并前往目标页面，或者放弃本次修改。",
+        confirmLabel: "保存并前往",
+        secondaryLabel: "放弃修改并前往",
+        cancelLabel: "继续编辑",
+        onConfirm: async () => {
+          const saved = await settingsPanelRef.current?.save();
+          if (!saved) throw new Error("设置保存失败，已留在当前页面。");
+          setSettingsDirty(false);
+          selectViewNow(view);
+        },
+        onSecondary: async () => {
+          settingsPanelRef.current?.discard();
+          setSettingsDirty(false);
+          selectViewNow(view);
+        },
+      });
+      return false;
+    }
+    return selectViewNow(view);
   };
 
   const handleOnboardingStart = (action: OnboardingStartAction) => {
@@ -2575,6 +2600,7 @@ export default function App() {
           ) : activeView.kind === "settings" ? (
             settings ? (
               <SettingsPanel
+                ref={settingsPanelRef}
                 settings={settings}
                 autoWorkReviewSettings={autoWorkReviewSettings}
                 autoWorkReviewRunning={autoWorkReviewRunning}
@@ -2780,6 +2806,8 @@ export default function App() {
       />
       <ConfirmDialog
         confirmLabel={pendingConfirm?.confirmLabel}
+        cancelLabel={pendingConfirm?.cancelLabel}
+        secondaryLabel={pendingConfirm?.secondaryLabel}
         danger={pendingConfirm?.danger}
         message={pendingConfirm?.message ?? ""}
         onCancel={() => {
@@ -2798,6 +2826,12 @@ export default function App() {
           await confirm.onConfirm();
           setPendingConfirm(null);
         }}
+        onSecondary={pendingConfirm?.onSecondary ? async () => {
+          const confirm = pendingConfirm;
+          if (!confirm?.onSecondary) return;
+          await confirm.onSecondary();
+          setPendingConfirm(null);
+        } : undefined}
         open={Boolean(pendingConfirm)}
         title={pendingConfirm?.title ?? ""}
       />

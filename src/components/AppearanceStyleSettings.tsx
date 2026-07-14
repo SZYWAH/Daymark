@@ -155,8 +155,8 @@ export function AppearanceStyleSettings({
 
   return (
     <>
-      <section className="section-surface min-h-[76px] p-4">
-        <div className="flex min-w-0 flex-wrap items-center gap-3 sm:flex-nowrap">
+      <section className="section-surface p-0">
+        <div className="flex min-h-[76px] min-w-0 flex-wrap items-center gap-3 px-4 py-3 sm:flex-nowrap">
           <span className="relative grid h-10 w-14 shrink-0 grid-cols-2 overflow-hidden rounded-[8px] border border-line" aria-hidden="true">
             <span style={{ backgroundColor: paletteMeta.preview.paper }} />
             <span style={{ backgroundColor: paletteMeta.preview.surface }} />

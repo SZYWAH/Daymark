@@ -8,20 +8,22 @@ import {
   HardDrive,
   KeyRound,
   RefreshCw,
-  Save,
   ShieldCheck,
   Upload,
   X,
   XCircle,
   Library,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { getEffectiveAiSettings, getProviderLabel, hasEnvApiKey, testAiConnection } from "../ai/deepseek";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { fetchAvailableAiModels, hasEnvApiKey, testAiConnection } from "../ai/deepseek";
+import type { AiModelOption } from "../lib/aiTransport";
 import {
   isDesktopRuntime,
+  getQuickCaptureTopEntryEnabled,
   probeConversationSources,
   readTextFileWithDialog,
   saveTextFileWithDialog,
+  setQuickCaptureTopEntryEnabled,
 } from "../lib/desktop";
 import {
   exportCoreBackup,
@@ -31,13 +33,22 @@ import {
 } from "../data/itemStore";
 import { hasStoredAiApiKey } from "../lib/aiSecrets";
 import { getSafeErrorMessage } from "../lib/redaction";
+import {
+  getConnectionPresetLabel,
+  getConnectionProtocolLabel,
+  getCredentialStatusLabel,
+  getValidCredentialAddress,
+  type AiCredentialProbeState,
+} from "../lib/aiConnectionDisplay";
 import { saveThemeMode } from "../lib/theme";
 import { PageWorkspace } from "./PageWorkspace";
 import { ResultRow, ScrollableResultPanel } from "./ResultPanels";
 import { SelectMenu } from "./SelectMenu";
-import type { AiSettings, AutoWorkReviewSettings, ConversationSourceKind, ConversationSourceProbe } from "../types";
+import type { AiReasoningEffort, AiSettings, AutoWorkReviewSettings, ConversationSourceKind, ConversationSourceProbe } from "../types";
 import type { DemoLibraryState } from "../data/demoLibrary";
 import { AppearanceStyleSettings } from "./AppearanceStyleSettings";
+import { AiConnectionConfigDialog } from "./AiConnectionConfigDialog";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 type SettingsPanelProps = {
   settings: AiSettings;
@@ -54,10 +65,18 @@ type SettingsPanelProps = {
   onRemoveDemoLibrary: () => void;
 };
 
+export type SettingsPanelHandle = {
+  save: () => Promise<boolean>;
+  discard: () => void;
+};
+
 function normalizeSettingsForDirty(settings: AiSettings) {
   return {
     provider: settings.provider,
+    protocol: settings.protocol ?? "openai-chat-completions",
+    reasoningEffort: settings.reasoningEffort ?? "default",
     customProviderName: settings.customProviderName?.trim() ?? "",
+    anthropicAuthMode: settings.anthropicAuthMode ?? "x-api-key",
     baseUrl: settings.baseUrl.trim(),
     model: settings.model.trim(),
     useEnvKey: settings.useEnvKey,
@@ -76,7 +95,16 @@ function hasNonThemeSettingsChanges(draft: AiSettings, settings: AiSettings) {
   return JSON.stringify(draftWithoutTheme) !== JSON.stringify(settingsWithoutTheme);
 }
 
-export function SettingsPanel({
+function getCredentialHost(address: string | null) {
+  if (!address) return "等待有效地址";
+  try {
+    return new URL(address).host || address;
+  } catch {
+    return address;
+  }
+}
+
+export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>(function SettingsPanel({
   settings,
   autoWorkReviewSettings,
   autoWorkReviewRunning,
@@ -89,12 +117,19 @@ export function SettingsPanel({
   demoLibraryState,
   onInstallDemoLibrary,
   onRemoveDemoLibrary,
-}: SettingsPanelProps) {
+}: SettingsPanelProps, ref) {
   const [draft, setDraft] = useState(settings);
   const [saving, setSaving] = useState(false);
   const [themeSaving, setThemeSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [availableModels, setAvailableModels] = useState<AiModelOption[]>([]);
+  const [credentialProbeState, setCredentialProbeState] = useState<AiCredentialProbeState>("idle");
+  const [aiConfigOpen, setAiConfigOpen] = useState(false);
+  const [aiCloseConfirmOpen, setAiCloseConfirmOpen] = useState(false);
   const [backupBusy, setBackupBusy] = useState<"export" | "restore" | null>(null);
+  const [quickCaptureTopEntryEnabled, setQuickCaptureTopEntryEnabledState] = useState(true);
+  const [quickCaptureTopEntryBusy, setQuickCaptureTopEntryBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"ok" | "error" | "info">("info");
   const themeSaveSeqRef = useRef(0);
@@ -103,26 +138,40 @@ export function SettingsPanel({
   const testingRef = useRef(false);
   const keyProbeSeqRef = useRef(0);
   const backupInputRef = useRef<HTMLInputElement | null>(null);
+  const aiConfigTriggerRef = useRef<HTMLButtonElement | null>(null);
   const envKeyAvailable = hasEnvApiKey();
   const desktop = isDesktopRuntime();
-  const effective = useMemo(() => getEffectiveAiSettings(draft), [draft]);
   const pendingManualKey = Boolean(draft.manualApiKey?.trim());
-  const keySourceLabel =
-    effective.keySource === "env"
-      ? "环境变量"
-      : desktop
-        ? pendingManualKey
-          ? "手动输入待保存"
-          : draft.manualKeyStored
-            ? "系统凭据"
-            : "未配置"
-        : effective.keySource === "manual"
-          ? "本机应用数据"
-          : "未配置";
+  const credentialAddress = getValidCredentialAddress(draft.baseUrl);
+  const envKeyActive = draft.provider === "deepseek" && draft.useEnvKey && envKeyAvailable;
+  const credentialStatusLabel = getCredentialStatusLabel({
+    desktop,
+    envKeyActive,
+    pendingManualKey,
+    clearRequested: Boolean(draft.manualKeyClearRequested),
+    stored: Boolean(draft.manualKeyStored),
+    probeState: credentialProbeState,
+    validAddress: Boolean(credentialAddress),
+  });
   const dirty = useMemo(
     () => JSON.stringify(normalizeSettingsForDirty(draft)) !== JSON.stringify(normalizeSettingsForDirty(settings)),
     [draft, settings],
   );
+  const aiDirty = useMemo(() => hasNonThemeSettingsChanges(draft, settings), [draft, settings]);
+  const discoveredReasoningEfforts = availableModels.find((model) => model.id === draft.model)?.supportedReasoningEfforts;
+  const allReasoningEfforts: Array<{ value: AiReasoningEffort; label: string }> = [
+    { value: "default", label: "跟随模型（不发送 effort）" },
+    { value: "none", label: "none" },
+    { value: "minimal", label: "minimal" },
+    { value: "low", label: "low" },
+    { value: "medium", label: "medium" },
+    { value: "high", label: "high" },
+    { value: "xhigh", label: "xhigh" },
+  ];
+  const reasoningEfforts = allReasoningEfforts.filter((option) =>
+    option.value === "default"
+    || !discoveredReasoningEfforts?.length
+    || discoveredReasoningEfforts.includes(option.value as Exclude<AiReasoningEffort, "default">));
   const autoWorkReviewEnabled = Boolean(autoWorkReviewSettings?.enabled);
   const autoSourceKinds = autoWorkReviewSettings?.sourceKinds ?? ["codex", "claude"];
   const autoWorkReviewStatus = autoWorkReviewRunning
@@ -134,16 +183,36 @@ export function SettingsPanel({
   }, [settings]);
 
   useEffect(() => {
+    setAvailableModels([]);
+  }, [draft.provider, draft.baseUrl]);
+
+  useEffect(() => {
+    if (!desktop) return;
+    void getQuickCaptureTopEntryEnabled()
+      .then(setQuickCaptureTopEntryEnabledState)
+      .catch(() => undefined);
+  }, [desktop]);
+
+  useEffect(() => {
     onDirtyChange?.(dirty);
     return () => onDirtyChange?.(false);
   }, [dirty, onDirtyChange]);
 
   useEffect(() => {
-    if (!desktop || draft.manualApiKey?.trim() || draft.manualKeyClearRequested) return;
     const requestSeq = ++keyProbeSeqRef.current;
+    if (!credentialAddress) {
+      setCredentialProbeState("idle");
+      return;
+    }
+    if (!desktop || draft.manualApiKey?.trim() || draft.manualKeyClearRequested) {
+      setCredentialProbeState("ready");
+      return;
+    }
+    setCredentialProbeState("probing");
     void hasStoredAiApiKey(draft)
       .then((stored) => {
         if (keyProbeSeqRef.current !== requestSeq) return;
+        setCredentialProbeState("ready");
         setDraft((current) => {
           if (
             current.provider !== draft.provider ||
@@ -159,13 +228,14 @@ export function SettingsPanel({
       })
       .catch((error) => {
         if (keyProbeSeqRef.current !== requestSeq) return;
+        setCredentialProbeState("error");
         setMessageType("error");
         setMessage(getSafeErrorMessage(error, "无法读取系统凭据状态。"));
       });
-  }, [desktop, draft.provider, draft.baseUrl, draft.manualApiKey, draft.manualKeyClearRequested]);
+  }, [credentialAddress, desktop, draft.provider, draft.baseUrl, draft.manualApiKey, draft.manualKeyClearRequested]);
 
   const saveSettings = async () => {
-    if (savingRef.current || themeSavingRef.current) return;
+    if (savingRef.current || themeSavingRef.current) return false;
     savingRef.current = true;
     setSaving(true);
     setMessage("");
@@ -178,14 +248,25 @@ export function SettingsPanel({
       await onSave(saved);
       setMessageType("ok");
       setMessage("设置已保存。");
+      return true;
     } catch (error) {
       setMessageType("error");
       setMessage(getSafeErrorMessage(error, "保存失败。"));
+      return false;
     } finally {
       savingRef.current = false;
       setSaving(false);
     }
   };
+
+  useImperativeHandle(ref, () => ({
+    save: saveSettings,
+    discard: () => {
+      setDraft(settings);
+      setMessageType("info");
+      setMessage("已放弃未保存的 AI 配置修改。");
+    },
+  }), [settings, draft]);
 
   const toggleAutoWorkReviewSource = async (source: ConversationSourceKind) => {
     const current = new Set(autoSourceKinds);
@@ -195,6 +276,22 @@ export function SettingsPanel({
       current.add(source);
     }
     await onSaveAutoWorkReviewSettings({ sourceKinds: Array.from(current) });
+  };
+
+  const changeQuickCaptureTopEntry = async (enabled: boolean) => {
+    if (!desktop || quickCaptureTopEntryBusy) return;
+    setQuickCaptureTopEntryBusy(true);
+    try {
+      await setQuickCaptureTopEntryEnabled(enabled);
+      setQuickCaptureTopEntryEnabledState(enabled);
+      setMessageType("ok");
+      setMessage(enabled ? "顶部快速记录入口已开启。" : "顶部快速记录入口已关闭；快捷键和托盘入口仍可使用。");
+    } catch (error) {
+      setMessageType("error");
+      setMessage(getSafeErrorMessage(error, "无法更新顶部快速记录入口。"));
+    } finally {
+      setQuickCaptureTopEntryBusy(false);
+    }
   };
 
   const exportBackup = async () => {
@@ -314,6 +411,23 @@ export function SettingsPanel({
     }
   };
 
+  const fetchModels = async () => {
+    if (modelsLoading) return;
+    setModelsLoading(true);
+    setMessage("");
+    try {
+      const models = await fetchAvailableAiModels(draft);
+      setAvailableModels(models);
+      setMessageType("ok");
+      setMessage(`已获取 ${models.length} 个模型；可从列表选择，也可继续手动输入。`);
+    } catch (error) {
+      setMessageType("error");
+      setMessage(getSafeErrorMessage(error, "获取模型列表失败。"));
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
   const changeThemeMode = (mode: AiSettings["themeMode"]) => {
     if (themeSavingRef.current || draft.themeMode === mode) return;
     themeSavingRef.current = true;
@@ -352,45 +466,104 @@ export function SettingsPanel({
       });
   };
 
+  const finishClosingAiConfig = () => {
+    setAiCloseConfirmOpen(false);
+    setAiConfigOpen(false);
+    window.setTimeout(() => aiConfigTriggerRef.current?.focus(), 0);
+  };
+
+  const requestCloseAiConfig = () => {
+    if (saving || testing) return;
+    if (aiDirty) {
+      setAiCloseConfirmOpen(true);
+      return;
+    }
+    finishClosingAiConfig();
+  };
+
+  const discardAiConfigChanges = () => {
+    setDraft(settings);
+    setAvailableModels([]);
+    setMessageType("info");
+    setMessage("已放弃未保存的 AI 配置修改。");
+    finishClosingAiConfig();
+  };
+
   return (
+    <>
     <PageWorkspace
       eyebrow="Settings"
       title="设置"
       description="把外部能力收好，真正使用前再轻轻打开。"
-      meta={getProviderLabel(draft)}
-      actions={
-        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-          <button
-            className={`${dirty ? "primary-action" : "secondary-action"} action-standard text-xs disabled:cursor-not-allowed disabled:opacity-55`}
-            disabled={saving || themeSaving || !dirty}
-            onClick={saveSettings}
-          >
-            <Save size={15} />
-            {saving ? "保存中" : "保存"}
-          </button>
-          <button
-            className="secondary-action action-standard text-xs"
-            disabled={testing || saving || themeSaving}
-            onClick={testConnection}
-          >
-            <Bot size={15} />
-            {testing ? "测试中" : "测试连接"}
-          </button>
-          {dirty && <span className="text-xs text-copper/80">未保存</span>}
-        </div>
-      }
+      meta={getConnectionPresetLabel(draft)}
     >
       <div className="min-h-full px-5 pb-24 pt-5 lg:pb-5 xl:h-full xl:min-h-0 xl:overflow-hidden">
         <div className="mx-auto grid min-h-0 max-w-7xl gap-5 xl:h-full xl:grid-cols-[minmax(0,1fr)_380px]">
-          <div className="space-y-5 pr-1 xl:min-h-0 xl:overflow-y-auto xl:scrollbar-thin">
-        <div>
+          <div className="space-y-0 pr-1 xl:min-h-0 xl:overflow-y-auto xl:scrollbar-thin">
+        <div className="flex flex-col">
           <AppearanceStyleSettings
             mode={draft.themeMode}
             disabled={themeSaving || saving}
             onModeChange={changeThemeMode}
           />
 
-          <div className="section-surface space-y-4 p-5">
+          <section className="section-surface p-0">
+            <div className="flex min-h-[76px] min-w-0 flex-wrap items-center gap-3 px-4 py-3 sm:flex-nowrap">
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] border border-line bg-panel text-ink/62" aria-hidden="true">
+                  <Bot size={17} />
+                </span>
+                <div className="min-w-0">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <h3 className="text-sm font-semibold text-ink">AI 连接</h3>
+                    <span className="truncate text-sm text-ink/68">
+                      {getConnectionPresetLabel(draft)} · {getConnectionProtocolLabel(draft)} · {draft.model.trim() || "未填写模型"}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-ink/46" title={credentialAddress ?? undefined}>
+                    {getCredentialHost(credentialAddress)} · 凭据：{credentialStatusLabel}
+                    {aiDirty ? " · 有未保存修改" : ""}
+                  </p>
+                </div>
+              </div>
+              <button
+                ref={aiConfigTriggerRef}
+                type="button"
+                className="secondary-action action-standard shrink-0 gap-1.5 text-xs"
+                disabled={themeSaving || saving}
+                onClick={() => setAiConfigOpen(true)}
+                aria-haspopup="dialog"
+                aria-expanded={aiConfigOpen}
+              >
+                <Bot size={14} aria-hidden="true" />
+                配置 AI
+              </button>
+            </div>
+          </section>
+
+          {!aiConfigOpen && message && <SettingsMessage message={message} messageType={messageType} />}
+
+          <div className="section-surface order-4 flex flex-wrap items-center justify-between gap-4 p-5">
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Quick Capture</p>
+              <h3 className="mt-1 text-base font-semibold text-ink">顶部快速记录入口</h3>
+              <p className="mt-1 text-sm leading-6 text-ink/52">
+                触碰屏幕顶部后先显示薄入口，点击才展开记录窗。关闭后仍可使用 Ctrl+Shift+Space 或托盘入口。
+              </p>
+            </div>
+            <label className="flex shrink-0 items-center gap-2 text-sm text-ink/70">
+              <input
+                type="checkbox"
+                checked={quickCaptureTopEntryEnabled}
+                disabled={!desktop || quickCaptureTopEntryBusy}
+                onChange={(event) => void changeQuickCaptureTopEntry(event.target.checked)}
+                className="control-checkbox"
+              />
+              {quickCaptureTopEntryEnabled ? "已开启" : "已关闭"}
+            </label>
+          </div>
+
+          <div className="section-surface order-3 space-y-4 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Backup</p>
@@ -492,40 +665,72 @@ export function SettingsPanel({
           </p>
         </div>
 
-        <div className="section-surface space-y-4 p-5">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">AI Provider</p>
-            <h3 className="mt-1 text-base font-semibold text-ink">AI 整理</h3>
-            <p className="mt-1 text-sm leading-6 text-ink/52">手动整理只在你点击时调用；若开启自动工作回顾，会按上方设置定时调用。</p>
-          </div>
-
+        <AiConnectionConfigDialog
+          open={aiConfigOpen}
+          busy={saving || testing}
+          onRequestClose={requestCloseAiConfig}
+          footer={
+            <>
+              <button
+                type="button"
+                className="secondary-action action-standard text-xs"
+                disabled={testing || saving || themeSaving}
+                onClick={() => void testConnection()}
+              >
+                <Bot size={15} />
+                {testing ? "测试中" : "测试连接"}
+              </button>
+              <button
+                type="button"
+                className={`${aiDirty ? "primary-action" : "secondary-action"} action-standard text-xs disabled:cursor-not-allowed disabled:opacity-55`}
+                disabled={saving || themeSaving || !aiDirty}
+                onClick={() => void saveSettings()}
+              >
+                {saving ? <RefreshCw size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                {saving ? "保存中" : "保存设置"}
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             <label className="text-xs font-medium text-ink/58">
-              AI 供应商
-              <div className="mt-1">
+              连接预设
+              <div className="mt-1" data-ai-config-start>
                 <SelectMenu
                   value={draft.provider}
                   options={[
-                    { value: "deepseek", label: "DeepSeek" },
-                    { value: "openai-compatible", label: "OpenAI 兼容自定义" },
+                    { value: "deepseek", label: "DeepSeek（预设）" },
+                    { value: "openai-compatible", label: "OpenAI 协议兼容" },
+                    { value: "anthropic-messages", label: "Anthropic Messages" },
                   ]}
                   onChange={(value) => {
                     const provider = value as AiSettings["provider"];
                     const providerChanged = provider !== draft.provider;
+                    const providerDefaults = provider === "deepseek"
+                      ? { baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash" }
+                      : provider === "anthropic-messages"
+                        ? { baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-6" }
+                        : { baseUrl: "https://api.openai.com/v1", model: "" };
                     setDraft({
                       ...draft,
                       provider,
-                      supportsVision: provider === "openai-compatible" ? draft.supportsVision : false,
+                      protocol: provider === "anthropic-messages"
+                        ? "anthropic-messages"
+                        : "openai-chat-completions",
+                      reasoningEffort: providerChanged ? "default" : draft.reasoningEffort ?? "default",
+                      supportsVision: provider === "deepseek" ? false : draft.supportsVision,
                       useEnvKey: provider === "deepseek" ? draft.useEnvKey : false,
-                      baseUrl: provider === "deepseek" ? "https://api.deepseek.com" : draft.baseUrl,
-                      model: provider === "deepseek" ? "deepseek-v4-flash" : draft.model,
+                      baseUrl: providerChanged ? providerDefaults.baseUrl : draft.baseUrl,
+                      model: providerChanged ? providerDefaults.model : draft.model,
+                      anthropicAuthMode: provider === "anthropic-messages" ? draft.anthropicAuthMode ?? "x-api-key" : "x-api-key",
                       manualApiKey: providerChanged ? "" : draft.manualApiKey,
                       manualKeyStored: providerChanged ? false : draft.manualKeyStored,
                       manualKeyClearRequested: false,
                     });
                     if (providerChanged) {
                       setMessageType("info");
-                      setMessage("已切换供应商。为避免旧 Key 误用，手动 API Key 已清空。");
+                      setMessage("已切换连接预设，正在检查当前地址对应的凭据；其他连接的 Key 不会被删除。");
                     }
                   }}
                 />
@@ -534,13 +739,73 @@ export function SettingsPanel({
 
             <label className="text-xs font-medium text-ink/58">
               模型
-              <input
-                value={draft.model}
-                onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                className="field-control field-prominent mt-1 w-full"
-              />
+              <div className="mt-1 flex gap-2">
+                <input
+                  value={draft.model}
+                  onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+                  className="field-control field-prominent min-w-0 flex-1"
+                />
+                {draft.provider === "openai-compatible" && (
+                  <button
+                    type="button"
+                    className="secondary-action action-prominent shrink-0 text-xs"
+                    disabled={modelsLoading || !draft.baseUrl.trim()}
+                    onClick={() => void fetchModels()}
+                  >
+                    <RefreshCw size={14} className={modelsLoading ? "animate-spin" : ""} />
+                    {modelsLoading ? "获取中" : "获取模型"}
+                  </button>
+                )}
+              </div>
+              {draft.provider === "openai-compatible" && availableModels.length > 0 && (
+                <div className="mt-2">
+                  <SelectMenu
+                    value={availableModels.some((model) => model.id === draft.model) ? draft.model : ""}
+                    options={availableModels.map((model) => ({ value: model.id, label: model.id }))}
+                    placeholder="从已获取模型中选择"
+                    searchable
+                    triggerClassName="field-standard text-xs"
+                    onChange={(model) => setDraft({ ...draft, model })}
+                  />
+                </div>
+              )}
             </label>
           </div>
+
+          {draft.provider === "openai-compatible" && (
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="text-xs font-medium text-ink/58">
+                接口协议
+                <div className="mt-1">
+                  <SelectMenu
+                    value={draft.protocol === "openai-responses" ? "openai-responses" : "openai-chat-completions"}
+                    options={[
+                      { value: "openai-chat-completions", label: "Chat Completions" },
+                      { value: "openai-responses", label: "Responses" },
+                    ]}
+                    onChange={(protocol) => setDraft({
+                      ...draft,
+                      protocol: protocol === "openai-responses" ? "openai-responses" : "openai-chat-completions",
+                    })}
+                  />
+                </div>
+              </label>
+              <label className="text-xs font-medium text-ink/58">
+                推理强度
+                <div className="mt-1">
+                  <SelectMenu
+                    value={draft.reasoningEffort ?? "default"}
+                    options={reasoningEfforts}
+                    disabled={draft.protocol !== "openai-responses"}
+                    onChange={(reasoningEffort) => setDraft({
+                      ...draft,
+                      reasoningEffort: reasoningEffort as AiReasoningEffort,
+                    })}
+                  />
+                </div>
+              </label>
+            </div>
+          )}
 
           {draft.provider === "openai-compatible" && (
             <label className="block text-xs font-medium text-ink/58">
@@ -551,6 +816,25 @@ export function SettingsPanel({
                 placeholder="例如 OpenAI、硅基流动、OpenRouter"
                 className="field-control field-prominent mt-1 w-full"
               />
+            </label>
+          )}
+
+          {draft.provider === "anthropic-messages" && (
+            <label className="block text-xs font-medium text-ink/58">
+              鉴权方式
+              <div className="mt-1">
+                <SelectMenu
+                  value={draft.anthropicAuthMode ?? "x-api-key"}
+                  options={[
+                    { value: "x-api-key", label: "x-api-key（Anthropic 官方默认）" },
+                    { value: "bearer", label: "Authorization: Bearer（兼容网关）" },
+                  ]}
+                  onChange={(value) => setDraft({
+                    ...draft,
+                    anthropicAuthMode: value === "bearer" ? "bearer" : "x-api-key",
+                  })}
+                />
+              </div>
             </label>
           )}
 
@@ -571,20 +855,29 @@ export function SettingsPanel({
           </label>
 
           <div className="rounded-[8px] border border-moss/30 bg-moss/10 p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-moss">
+            <div className="flex items-center gap-2 text-sm font-semibold text-moss">
               <KeyRound size={16} />
-              API Key 来源
+              当前连接凭据
             </div>
-            <label className="mb-3 flex items-center gap-2 text-sm text-ink/70">
-              <input
-                type="checkbox"
-                checked={draft.useEnvKey}
-                disabled={draft.provider !== "deepseek"}
-                onChange={(event) => setDraft({ ...draft, useEnvKey: event.target.checked })}
-                className="control-checkbox"
-              />
-              优先使用环境变量 VITE_DEEPSEEK_API_KEY（仅 DeepSeek）
-            </label>
+            <div className="my-3 flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-[7px] border border-line/80 bg-surface/65 px-3 py-2 text-xs">
+              <span className="min-w-0 truncate text-ink/56" title={credentialAddress ?? undefined}>
+                当前地址凭据：{credentialAddress ?? "等待有效地址"}
+              </span>
+              <span className={`shrink-0 ${credentialStatusLabel === "读取失败" ? "text-red-400" : "text-ink/76"}`}>
+                {credentialStatusLabel}
+              </span>
+            </div>
+            {draft.provider === "deepseek" && (
+              <label className="mb-3 flex items-center gap-2 text-sm text-ink/70">
+                <input
+                  type="checkbox"
+                  checked={draft.useEnvKey}
+                  onChange={(event) => setDraft({ ...draft, useEnvKey: event.target.checked })}
+                  className="control-checkbox"
+                />
+                优先使用环境变量 VITE_DEEPSEEK_API_KEY
+              </label>
+            )}
             <div className="flex gap-2">
               <input
                 value={draft.manualApiKey ?? ""}
@@ -599,8 +892,8 @@ export function SettingsPanel({
                 placeholder={
                   desktop
                     ? draft.manualKeyStored
-                      ? "已保存到系统凭据；输入新 Key 会覆盖"
-                      : "填写 API Key；保存后进入系统凭据"
+                      ? "当前地址已有系统凭据；输入新 Key 会覆盖"
+                      : "填写当前地址的 API Key；保存后进入系统凭据"
                     : "填写 API Key；Web 模式保存在本机应用数据中"
                 }
                 className="field-control field-prominent min-w-0 flex-1"
@@ -611,7 +904,7 @@ export function SettingsPanel({
                 onClick={() => {
                   if (draft.manualApiKey?.trim()) {
                     setDraft({ ...draft, manualApiKey: "", manualKeyClearRequested: false });
-                    setMessage("待保存的手动 API Key 已从当前配置草稿中清除。");
+                    setMessage("待保存的 API Key 已从当前连接草稿中清除。");
                   } else {
                     setDraft({
                       ...draft,
@@ -619,7 +912,7 @@ export function SettingsPanel({
                       manualKeyStored: false,
                       manualKeyClearRequested: true,
                     });
-                    setMessage("当前 Base URL 的系统凭据 Key 已标记清除，保存后生效。");
+                    setMessage("当前地址的系统凭据已标记删除，保存后生效；其他地址的 Key 不受影响。");
                   }
                   setMessageType("info");
                 }}
@@ -629,16 +922,16 @@ export function SettingsPanel({
               </button>
             </div>
             <p className="mt-3 text-xs leading-5 text-ink/52">
-              {envKeyAvailable
-                ? draft.provider === "deepseek"
-                  ? "已检测到 DeepSeek 环境变量 Key，调用时会优先使用它。注意：Vite 环境变量不是系统钥匙串，若在打包前写入 Key，不适合把生成的应用分发给他人。"
-                  : "自定义供应商使用下方手动 API Key，不读取 DeepSeek 环境变量。"
-                : "未检测到 DeepSeek 环境变量 Key。自定义供应商可直接填写自己的 API Key。"}
-              {" "}桌面端手动 Key 会保存到系统凭据；Web 模式保留本机应用数据降级。连接错误会在界面显示前脱敏。
+              {draft.provider === "deepseek"
+                ? envKeyAvailable
+                  ? "已检测到 DeepSeek 环境变量 Key；启用后调用时优先使用它。"
+                  : "未检测到 DeepSeek 环境变量 Key，可改用当前地址的手动 Key。"
+                : "当前连接不会读取 DeepSeek 环境变量。"}
+              {" "}桌面端手动 Key 按“连接预设 + Base URL”保存到系统凭据；同一 OpenAI 地址的 Chat Completions 与 Responses 共享 Key，不同地址及 Anthropic 相互隔离。真实 Key 不会回显。
             </p>
           </div>
 
-          {draft.provider === "openai-compatible" && (
+          {draft.provider !== "deepseek" && (
             <div className="rounded-[8px] border border-line bg-panel/75 p-4">
               <div className="mb-3 text-sm font-semibold text-ink">自定义模型能力</div>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -662,39 +955,31 @@ export function SettingsPanel({
                 </label>
               </div>
               <p className="mt-3 text-xs leading-5 text-ink/52">
-                请求使用 OpenAI Chat Completions 兼容格式：Base URL 后自动拼接 /chat/completions。图片只在你点击资料 AI 操作时读取并发送。
+                {draft.provider === "anthropic-messages"
+                  ? "请求使用 Anthropic Messages 格式：根地址后自动拼接 /v1/messages，API 版本固定为 2023-06-01。图片只在你点击资料 AI 操作时读取并发送。"
+                  : draft.protocol === "openai-responses"
+                    ? "请求使用 OpenAI Responses 格式：根地址后自动拼接 /responses，固定发送 store:false；推理强度默认跟随模型。"
+                    : "请求使用 OpenAI Chat Completions 兼容格式：Base URL 后自动拼接 /chat/completions。图片只在你点击资料 AI 操作时读取并发送。"}
+                {!desktop && " Web 开发模式可能受到服务端 CORS 策略限制。"}
               </p>
             </div>
           )}
 
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-ink/45">
-              当前模型：{getProviderLabel(draft)} · Key 来源：{keySourceLabel}
+              当前连接：{getConnectionPresetLabel(draft)} · {getConnectionProtocolLabel(draft)} · 模型：{draft.model.trim() || "未填写"}
+              {` · 凭据：${credentialStatusLabel}`}
             </span>
-            {dirty && <span className="text-xs text-copper/80">有未保存修改</span>}
+            {aiDirty && <span className="text-xs text-copper/80">有未保存修改</span>}
           </div>
 
-          {message && (
-            <div
-              role={messageType === "error" ? "alert" : "status"}
-              aria-live={messageType === "error" ? "assertive" : "polite"}
-              className={`flex max-h-36 items-start gap-2 overflow-y-auto rounded-[8px] border p-3 text-sm scrollbar-thin ${
-                messageType === "ok"
-                  ? "border-ink/20 bg-ink/10 text-ink"
-                  : messageType === "error"
-                    ? "border-red-400/45 bg-red-500/10 text-red-400"
-                    : "border-line bg-surface text-ink/62"
-              }`}
-            >
-              {messageType === "ok" ? <CheckCircle2 size={16} /> : messageType === "error" ? <XCircle size={16} /> : <ShieldCheck size={16} />}
-              <span className="min-w-0 whitespace-pre-wrap text-anywhere">{message}</span>
-            </div>
-          )}
+          {message && <SettingsMessage message={message} messageType={messageType} />}
 
           <p className="text-xs leading-5 text-ink/42">
             “测试连接”只发送最小连接请求，用于确认模型可访问；不会发送资料库、日志或记忆正文。
           </p>
         </div>
+        </AiConnectionConfigDialog>
           </div>
           <aside className="space-y-5 pr-1 xl:min-h-0 xl:overflow-y-auto xl:scrollbar-thin">
             <UsageHelp
@@ -709,6 +994,44 @@ export function SettingsPanel({
         </div>
       </div>
     </PageWorkspace>
+    <ConfirmDialog
+      open={aiCloseConfirmOpen}
+      title="AI 配置尚未保存"
+      message="关闭后可以保留当前草稿，或放弃这些未保存的连接与凭据修改。"
+      cancelLabel="继续编辑"
+      secondaryLabel="保留草稿后关闭"
+      confirmLabel="放弃修改并关闭"
+      danger
+      onCancel={() => setAiCloseConfirmOpen(false)}
+      onSecondary={finishClosingAiConfig}
+      onConfirm={discardAiConfigChanges}
+    />
+    </>
+  );
+});
+
+function SettingsMessage({
+  message,
+  messageType,
+}: {
+  message: string;
+  messageType: "ok" | "error" | "info";
+}) {
+  return (
+    <div
+      role={messageType === "error" ? "alert" : "status"}
+      aria-live={messageType === "error" ? "assertive" : "polite"}
+      className={`flex max-h-36 items-start gap-2 overflow-y-auto rounded-[8px] border p-3 text-sm scrollbar-thin ${
+        messageType === "ok"
+          ? "border-ink/20 bg-ink/10 text-ink"
+          : messageType === "error"
+            ? "border-red-400/45 bg-red-500/10 text-red-400"
+            : "border-line bg-surface text-ink/62"
+      }`}
+    >
+      {messageType === "ok" ? <CheckCircle2 size={16} /> : messageType === "error" ? <XCircle size={16} /> : <ShieldCheck size={16} />}
+      <span className="min-w-0 whitespace-pre-wrap text-anywhere">{message}</span>
+    </div>
   );
 }
 

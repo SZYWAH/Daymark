@@ -83,12 +83,18 @@ export type FolderNode = {
   updatedAt: string;
 };
 
-export type AiProvider = "deepseek" | "openai-compatible";
+export type AiProvider = "deepseek" | "openai-compatible" | "anthropic-messages";
+export type AiProtocol = "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+export type AiReasoningEffort = "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type AnthropicAuthMode = "x-api-key" | "bearer";
 
 export type AiSettings = {
   id: "ai";
   provider: AiProvider;
+  protocol?: AiProtocol;
+  reasoningEffort?: AiReasoningEffort;
   customProviderName?: string;
+  anthropicAuthMode?: AnthropicAuthMode;
   baseUrl: string;
   model: string;
   useEnvKey: boolean;

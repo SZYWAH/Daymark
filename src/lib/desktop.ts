@@ -383,6 +383,18 @@ export async function getQuickCaptureRuntimeState() {
   return invoke<QuickCaptureRuntimeState>("get_quick_capture_runtime_state");
 }
 
+export async function getQuickCaptureTopEntryEnabled() {
+  if (!isDesktopRuntime()) return false;
+
+  return invoke<boolean>("get_quick_capture_top_entry_enabled");
+}
+
+export async function setQuickCaptureTopEntryEnabled(enabled: boolean) {
+  if (!isDesktopRuntime()) return;
+
+  await invoke("set_quick_capture_top_entry_enabled", { enabled });
+}
+
 export async function finalizeQuickCaptureDrag(token?: number) {
   if (!isDesktopRuntime()) return null;
 

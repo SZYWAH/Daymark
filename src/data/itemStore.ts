@@ -452,7 +452,10 @@ export function getDefaultAiSettings(): AiSettings {
   return {
     id: "ai",
     provider: "deepseek",
+    protocol: "openai-chat-completions",
+    reasoningEffort: "default",
     customProviderName: "",
+    anthropicAuthMode: "x-api-key",
     baseUrl: import.meta.env.VITE_DEEPSEEK_BASE_URL || "https://api.deepseek.com",
     model: import.meta.env.VITE_DEEPSEEK_MODEL || "deepseek-v4-flash",
     useEnvKey: true,
@@ -1634,12 +1637,27 @@ export async function getAiSettings() {
   const db = await getDb();
   const saved = await db.get(SETTINGS_STORE, "ai");
   const savedProvider = String(saved?.provider ?? "deepseek");
-  const provider = savedProvider === "OpenAICompatible" || savedProvider === "openai-compatible" ? "openai-compatible" : "deepseek";
+  const provider = savedProvider === "OpenAICompatible" || savedProvider === "openai-compatible"
+    ? "openai-compatible"
+    : savedProvider === "anthropic-messages"
+      ? "anthropic-messages"
+      : "deepseek";
+  const protocol = provider === "anthropic-messages"
+    ? "anthropic-messages"
+    : provider === "openai-compatible" && saved?.protocol === "openai-responses"
+      ? "openai-responses"
+      : "openai-chat-completions";
+  const reasoningEfforts = new Set(["default", "none", "minimal", "low", "medium", "high", "xhigh"]);
   const settings: AiSettings = {
     ...getDefaultAiSettings(),
     ...saved,
     id: "ai",
     provider,
+    protocol,
+    reasoningEffort: reasoningEfforts.has(String(saved?.reasoningEffort))
+      ? saved?.reasoningEffort
+      : "default",
+    anthropicAuthMode: saved?.anthropicAuthMode === "bearer" ? "bearer" : "x-api-key",
     supportsVision: Boolean(saved?.supportsVision),
     manualKeyStored: Boolean(saved?.manualKeyStored),
     manualKeyClearRequested: false,
@@ -1651,7 +1669,17 @@ export async function getAiSettings() {
 
 export async function saveAiSettings(settings: AiSettings) {
   const db = await getDb();
-  const provider = settings.provider === "openai-compatible" ? "openai-compatible" : "deepseek";
+  const provider = settings.provider === "openai-compatible"
+    ? "openai-compatible"
+    : settings.provider === "anthropic-messages"
+      ? "anthropic-messages"
+      : "deepseek";
+  const protocol = provider === "anthropic-messages"
+    ? "anthropic-messages"
+    : provider === "openai-compatible" && settings.protocol === "openai-responses"
+      ? "openai-responses"
+      : "openai-chat-completions";
+  const reasoningEfforts = new Set(["default", "none", "minimal", "low", "medium", "high", "xhigh"]);
   const {
     manualKeyClearRequested: _manualKeyClearRequested,
     ...settingsToSave
@@ -1660,8 +1688,13 @@ export async function saveAiSettings(settings: AiSettings) {
     ...settingsToSave,
     id: "ai",
     provider,
+    protocol,
+    reasoningEffort: reasoningEfforts.has(String(settings.reasoningEffort))
+      ? settings.reasoningEffort
+      : "default",
+    anthropicAuthMode: settings.anthropicAuthMode === "bearer" ? "bearer" : "x-api-key",
     customProviderName: provider === "openai-compatible" ? settings.customProviderName?.trim() || "自定义模型" : "",
-    supportsVision: provider === "openai-compatible" ? Boolean(settings.supportsVision) : false,
+    supportsVision: provider !== "deepseek" ? Boolean(settings.supportsVision) : false,
     manualKeyStored: Boolean(settings.manualKeyStored),
     themeMode: settings.themeMode ?? "dark",
     updatedAt: formatTimestamp(),
