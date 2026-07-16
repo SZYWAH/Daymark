@@ -7,8 +7,11 @@ import {
   buildOpenAiResponsesEndpoint,
   extractResponsesContent,
   extractBrowserStreamToken,
+  isRetryableReviewChunkTimeout,
   normalizeAiPrompt,
   parseModelListResponse,
+  splitReviewChunkForRetry,
+  summarizeReviewChunksWithTimeoutFallback,
 } from "./deepseek";
 
 describe("buildChatCompletionsEndpoint", () => {
@@ -76,6 +79,17 @@ describe("OpenAI Responses adapter", () => {
       type: "response.output_text.delta",
       delta: "hello",
     })).toBe("hello");
+    expect(extractBrowserStreamToken("openai-responses", {
+      type: "response.output_text.done",
+      text: "gateway text",
+    })).toBe("gateway text");
+    expect(extractBrowserStreamToken("openai-responses", {
+      type: "response.output_item.done",
+      item: { content: [{ type: "output_text", text: "item text" }] },
+    })).toBe("item text");
+    expect(extractBrowserStreamToken("openai-responses", {
+      choices: [{ delta: { content: "chat-shaped gateway text" } }],
+    })).toBe("chat-shaped gateway text");
     expect(extractBrowserStreamToken("openai-responses", { type: "response.created" })).toBe("");
     expect(() => extractBrowserStreamToken("openai-responses", {
       type: "response.incomplete",
@@ -169,5 +183,61 @@ describe("Anthropic Messages adapter", () => {
     })).toBe("hello");
     expect(extractBrowserStreamToken("anthropic-messages", { type: "ping" })).toBe("");
     expect(extractBrowserStreamToken("anthropic-messages", { type: "future_event" })).toBe("");
+  });
+});
+
+describe("conversation review chunk fallback", () => {
+  it("splits an eight-thousand-character timeout segment into two equal retries", () => {
+    const chunks = splitReviewChunkForRetry("x".repeat(8_000));
+    expect(chunks).toHaveLength(2);
+    expect(chunks.map((chunk) => Array.from(chunk).length)).toEqual([4_000, 4_000]);
+  });
+
+  it("retries only the timed-out segment and keeps completed summaries", async () => {
+    const calls: string[] = [];
+    const progress: string[] = [];
+    const summaries = await summarizeReviewChunksWithTimeoutFallback(
+      ["first", "x".repeat(8_000), "third"],
+      async (attempt) => {
+        const label = `${attempt.originalIndex + 1}${attempt.retryPart ?? ""}`;
+        calls.push(label);
+        if (attempt.originalIndex === 1 && !attempt.retryPart) {
+          throw new Error("AI 请求超时。");
+        }
+        return `summary-${label}`;
+      },
+      {
+        onProgress: (event) => progress.push(`${event.kind}:${event.attempt.originalIndex + 1}${event.attempt.retryPart ?? ""}`),
+      },
+    );
+
+    expect(calls).toEqual(["1", "2", "2a", "2b", "3"]);
+    expect(summaries).toEqual(["summary-1", "summary-2a", "summary-2b", "summary-3"]);
+    expect(progress).toContain("retry:2");
+    expect(calls.filter((label) => label === "1")).toHaveLength(1);
+  });
+
+  it("does not retry authentication errors or cancelled requests", async () => {
+    await expect(summarizeReviewChunksWithTimeoutFallback(
+      ["only"],
+      async () => {
+        throw new Error("HTTP 401：鉴权失败。");
+      },
+    )).rejects.toThrow("HTTP 401");
+
+    const controller = new AbortController();
+    let calls = 0;
+    await expect(summarizeReviewChunksWithTimeoutFallback(
+      ["only"],
+      async () => {
+        calls += 1;
+        controller.abort();
+        throw new Error("AI 请求超时。");
+      },
+      { signal: controller.signal },
+    )).rejects.toThrow("AI 请求超时");
+    expect(calls).toBe(1);
+    expect(isRetryableReviewChunkTimeout(new Error("HTTP 401：鉴权失败。"))).toBe(false);
+    expect(isRetryableReviewChunkTimeout(new Error("AI 请求超时。"))).toBe(true);
   });
 });

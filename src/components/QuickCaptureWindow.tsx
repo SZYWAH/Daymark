@@ -221,10 +221,10 @@ function QuickCaptureEmergencyPanel() {
             </div>
           </header>
           <div className="quick-capture-input flex items-center text-sm text-white/58">
-            这次悬浮窗渲染失败了。草稿仍保留在本地，重新打开快速记录即可继续。
+            快速记录暂时不可用。草稿仍保存在本机，重新打开后可以继续。
           </div>
           <footer className="quick-capture-panel-footer">
-            <div className="quick-capture-status">这次没有新增到日志；草稿仍在本地。</div>
+            <div className="quick-capture-status">未写入日志；草稿仍保存在本机。</div>
           </footer>
         </div>
       </div>
@@ -650,13 +650,13 @@ function QuickCaptureStablePanel() {
     setSaving(true);
     const saveToken = await resolvePanelToken();
     if (!isCurrentPanelToken(saveToken)) {
-      showStatus("这次快速记录窗口已经过期，请重新打开后保存。", "error");
+      showStatus("此快速记录窗口已失效，请重新打开后保存。", "error");
       savingRef.current = false;
       setSaving(false);
       return;
     }
     await setQuickCaptureSaving(true, saveToken).catch(() => undefined);
-    showStatus("正在留下...");
+    showStatus("正在保存...");
     try {
       await createJournalEntry({ content: value, tags: [], todos: [] });
       markQuickCaptureDirty();
@@ -666,28 +666,28 @@ function QuickCaptureStablePanel() {
         .catch(() => false);
       if (!isCurrentPanelToken(saveToken)) {
         updateSavedClosing(false);
-        showStatus(notified ? "已留下。当前打开的是新的快速记录窗口，可以继续记录。" : "已保存。当前窗口已经更新，可以继续使用。");
+        showStatus(notified ? "已保存。当前打开的是新的快速记录窗口，可以继续记录。" : "已保存。当前窗口已更新，可以继续记录。");
         return;
       }
       updateSavedClosing(true);
-      showStatus(notified ? "已留下，稍后再慢慢整理。" : "已保存。重新打开主窗口后会自动刷新。");
+      showStatus("已保存。");
       saveCloseTimerRef.current = window.setTimeout(() => {
         if (!isCurrentPanelToken(saveToken)) return;
         void hideQuickCapturePanel(saveToken).then((hidden) => {
           if (!isCurrentPanelToken(saveToken) || hidden) return;
           updateSavedClosing(false);
-          showStatus("已留下，但悬浮窗没有自动收起，可以继续记录或手动收起。", "error");
+          showStatus("已保存，但窗口未自动收起。可继续记录或手动收起。", "error");
         });
       }, 760);
       saveCloseFallbackTimerRef.current = window.setTimeout(() => {
         if (!isCurrentPanelToken(saveToken) || !savedClosingRef.current) return;
         updateSavedClosing(false);
-        showStatus("已留下，但悬浮窗没有自动收起，可以继续记录或手动收起。", "error");
+        showStatus("已保存，但窗口未自动收起。可继续记录或手动收起。", "error");
       }, 2_800);
     } catch (error) {
       const safeError = getSafeErrorMessage(error, "");
       const detail = safeError ? `：${safeError}` : "";
-      showStatus(`没保存上，内容还在这里，可以再试${detail}`, "error");
+      showStatus(`保存失败，内容仍在此处${detail}`, "error");
     } finally {
       await setQuickCaptureSaving(false, saveToken).catch(() => undefined);
       savingRef.current = false;

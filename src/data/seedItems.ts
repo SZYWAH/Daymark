@@ -92,7 +92,7 @@ export const seedItems: Item[] = [
     folderId: "folder-learning",
     tags: ["知识卡片", "工作流"],
     content: "日常想法先进入日志；只有被反复使用、足够清楚或值得长期保存的内容，才提炼成资料库知识卡片。",
-    aiSummary: "资料库里的知识卡片是长期沉淀，不承担日常流水记录。",
+    aiSummary: "资料库里的知识卡片用于长期保存，不承担日常记录。",
     createdAt: "2026-07-03 12:30",
     updatedAt: "2026-07-03 12:30",
     favorite: false,

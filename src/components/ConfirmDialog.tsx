@@ -1,13 +1,14 @@
 import { AlertTriangle, Check, X } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 type ConfirmDialogProps = {
   open: boolean;
   title: string;
-  message: string;
+  message: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   secondaryLabel?: string;
+  showCloseButton?: boolean;
   danger?: boolean;
   onCancel: () => void;
   onConfirm: () => Promise<void> | void;
@@ -21,6 +22,7 @@ export function ConfirmDialog({
   confirmLabel = "确认",
   cancelLabel = "取消",
   secondaryLabel,
+  showCloseButton = true,
   danger = false,
   onCancel,
   onConfirm,
@@ -81,19 +83,21 @@ export function ConfirmDialog({
             <h2 className="text-base font-semibold text-ink" id={titleId}>
               {title}
             </h2>
-            <p className="mt-2 text-anywhere text-sm leading-6 text-ink/58" id={messageId}>
+            <div className="mt-2 text-anywhere text-sm leading-6 text-ink/58" id={messageId}>
               {message}
-            </p>
+            </div>
           </div>
-          <button
-            className="soft-button icon-action-compact"
-            disabled={busy}
-            onClick={onCancel}
-            title="关闭"
-            aria-label="关闭"
-          >
-            <X size={15} />
-          </button>
+          {showCloseButton && (
+            <button
+              className="soft-button icon-action-compact"
+              disabled={busy}
+              onClick={onCancel}
+              title="关闭"
+              aria-label="关闭"
+            >
+              <X size={15} />
+            </button>
+          )}
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button className="secondary-action action-standard" disabled={busy} onClick={onCancel}>

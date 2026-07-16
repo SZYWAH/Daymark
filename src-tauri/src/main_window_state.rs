@@ -119,7 +119,11 @@ fn claim_startup_show(state: &AtomicU8) -> bool {
 
 fn finish_startup_show(state: &AtomicU8, succeeded: bool) {
     state.store(
-        if succeeded { STARTUP_READY } else { STARTUP_PENDING },
+        if succeeded {
+            STARTUP_READY
+        } else {
+            STARTUP_PENDING
+        },
         Ordering::SeqCst,
     );
 }

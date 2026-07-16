@@ -231,7 +231,7 @@ export type ConversationSourceKind = "codex" | "claude";
 export type ConversationReviewKind = "source" | "combined" | "auto-work";
 export type ConversationProbeKind = "file" | "directory" | "database";
 export type ReviewDraftStatus = "pending" | "applied" | "ignored";
-export type GenerationDraftStatus = "running" | "cancelled" | "failed" | "completed";
+export type GenerationDraftStatus = "running" | "paused" | "cancelled" | "failed" | "completed";
 
 export type ConversationSourceProbe = {
   id: string;
@@ -257,7 +257,10 @@ export type ConversationSessionMeta = {
   id: string;
   sourceKind: ConversationSourceKind;
   sourceLabel: string;
+  /** Legacy creation date retained for existing local indexes. */
   date: string;
+  startedDate?: string;
+  lastActiveDate?: string;
   path: string;
   sizeBytes: number;
   modifiedAt: number;
@@ -285,6 +288,9 @@ export type ConversationSessionIndexOptions = {
 
 export type ConversationReviewInput = {
   date: string;
+  activityDateFrom?: string;
+  activityDateTo?: string;
+  activityDateWarning?: string;
   sourceKinds: ConversationSourceKind[];
   reviewKind: ConversationReviewKind;
   sessions: ConversationSessionMeta[];
@@ -292,6 +298,7 @@ export type ConversationReviewInput = {
   totalChars: number;
   redacted: boolean;
   truncated: boolean;
+  skippedOversizedRecordCount?: number;
 };
 
 export type AutoWorkReviewStatus = "idle" | "running" | "success" | "paused" | "error";
@@ -349,16 +356,21 @@ export type ConversationSessionDelta = {
   sourceKind: ConversationSourceKind;
   sourceLabel: string;
   date: string;
+  startedDate?: string;
+  lastActiveDate?: string;
   path: string;
   previousReadOffset: number;
   nextReadOffset: number;
   modifiedAt: number;
+  /** Cross-day context used only to understand a newly active session. */
+  contextTranscript: string;
   transcript: string;
   charCount: number;
   messageCount: number;
   redacted: boolean;
   truncated: boolean;
   reset: boolean;
+  skippedOversizedRecordCount?: number;
 };
 
 export type DailyConversationReview = {
@@ -372,7 +384,11 @@ export type DailyConversationReview = {
   content: string;
   sessionCount: number;
   sessionIds?: string[];
+  activityDateFrom?: string;
+  activityDateTo?: string;
   sourceReviewIds?: string[];
+  memorySuggestionStatus?: MemorySuggestionCheckpointStatus;
+  memorySuggestionCheckpoint?: MemorySuggestionCheckpointV1;
   createdAt: string;
   updatedAt: string;
 };
@@ -389,10 +405,79 @@ export type DailyReviewReplacementDraft = {
   content: string;
   sessionCount: number;
   sessionIds: string[];
+  activityDateFrom?: string;
+  activityDateTo?: string;
   sourceReviewIds?: string[];
+  memorySuggestionStatus?: MemorySuggestionCheckpointStatus;
+  memorySuggestionCheckpoint?: MemorySuggestionCheckpointV1;
   status: ReviewDraftStatus;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ReviewGenerationTaskStage =
+  | "reading"
+  | "summarizing"
+  | "compacting"
+  | "synthesizing"
+  | "memory-suggestion"
+  | "completed";
+
+export type ReviewGenerationSegmentCheckpoint = {
+  id: string;
+  originalIndex: number;
+  originalTotal: number;
+  retryPart?: "a" | "b";
+  summary: string;
+};
+
+export type ReviewGenerationCompactionCheckpoint = {
+  id: string;
+  level: number;
+  groupIndex: number;
+  groupTotal: number;
+  summary: string;
+};
+
+export type ReviewGenerationTaskCheckpointV1 = {
+  schemaVersion: 1;
+  promptVersion: string;
+  taskFingerprint: string;
+  settingsFingerprint: string;
+  provider?: AiProvider;
+  protocol?: AiProtocol;
+  model?: string;
+  stage: ReviewGenerationTaskStage;
+  activityDateFrom?: string;
+  activityDateTo?: string;
+  totalChars: number;
+  messageCount?: number;
+  chunkCount: number;
+  completedChunkCount: number;
+  chunkSummaries: ReviewGenerationSegmentCheckpoint[];
+  compactionSummaries: ReviewGenerationCompactionCheckpoint[];
+  compactionLevel: number;
+  compactionGroupIndex: number;
+  retryCount: number;
+  startedAt: string;
+  lastError?: string;
+  finalTitle?: string;
+  finalContent?: string;
+  persistedReviewId?: string;
+  persistedReviewDraftId?: string;
+  memorySuggestionStatus?: MemorySuggestionStatus;
+  memorySuggestion?: MemorySuggestionCheckpointV1;
+};
+
+export type ConversationReviewGenerationRequest = {
+  reviewKey: string;
+  date: string;
+  reviewKind: ConversationReviewKind;
+  sourceKind?: ConversationSourceKind;
+  sourceLabel: string;
+  selectedSessionIds: string[];
+  activityDateFrom?: string;
+  activityDateTo?: string;
 };
 
 export type ConversationGenerationDraft = {
@@ -408,6 +493,8 @@ export type ConversationGenerationDraft = {
   stage: string;
   message: string;
   status: GenerationDraftStatus;
+  checkpoint?: ReviewGenerationTaskCheckpointV1;
+  expiresAt?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -435,10 +522,51 @@ export type MemoryPatchDraft = {
   rationale: string;
   proposedContent: string;
   sourceReviewId?: string;
+  sourceReviewDraftId?: string;
+  sourceReviewContentVersion?: string;
   status: MemoryPatchStatus;
   createdAt: string;
   updatedAt: string;
 };
+
+export type MemorySuggestionStatus = "created" | "none" | "failed" | "cancelled";
+
+export type MemorySuggestionCheckpointStatus =
+  | "pending"
+  | "running"
+  | "created"
+  | "none"
+  | "failed"
+  | "cancelled";
+
+export type MemorySuggestionExecutionMode = "stream" | "non-stream";
+
+export type MemorySuggestionCheckpointV1 = {
+  schemaVersion: 1;
+  promptVersion: string;
+  status: MemorySuggestionCheckpointStatus;
+  sourceReviewId?: string;
+  sourceReviewDraftId?: string;
+  sourceContentVersion: string;
+  memoryContentVersion: string;
+  executionMode?: MemorySuggestionExecutionMode;
+  attemptCount: number;
+  retryCount: number;
+  lastError?: string;
+  patchDraftId?: string;
+  updatedAt: string;
+};
+
+export type MemorySuggestionGenerationResult = {
+  status: MemorySuggestionStatus;
+  patchDraft?: MemoryPatchDraft;
+  checkpoint?: MemorySuggestionCheckpointV1;
+  error?: string;
+};
+
+export type ReviewMemorySuggestionSource =
+  | { kind: "review"; review: DailyConversationReview }
+  | { kind: "replacement"; draft: DailyReviewReplacementDraft };
 
 export type ActiveView =
   | { kind: "today" }

@@ -784,6 +784,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
+ "time",
  "tokio",
  "tokio-util",
  "windows-sys 0.61.2",

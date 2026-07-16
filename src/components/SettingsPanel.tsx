@@ -20,12 +20,19 @@ import { fetchAvailableAiModels, hasEnvApiKey, testAiConnection } from "../ai/de
 import type { AiModelOption } from "../lib/aiTransport";
 import {
   isDesktopRuntime,
+  clearConversationDateIndex,
   getQuickCaptureTopEntryEnabled,
   probeConversationSources,
   readTextFileWithDialog,
   saveTextFileWithDialog,
   setQuickCaptureTopEntryEnabled,
 } from "../lib/desktop";
+import {
+  getConversationDateIndexPreference,
+  pauseConversationDateIndexCompletion,
+  saveConversationDateIndexPreference,
+  startConversationDateIndexCompletion,
+} from "../lib/conversationDateIndex";
 import {
   exportCoreBackup,
   validateCoreBackup,
@@ -131,6 +138,8 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
   const [backupBusy, setBackupBusy] = useState<"export" | "restore" | null>(null);
   const [quickCaptureTopEntryEnabled, setQuickCaptureTopEntryEnabledState] = useState(true);
   const [quickCaptureTopEntryBusy, setQuickCaptureTopEntryBusy] = useState(false);
+  const [dateIndexIdleEnabled, setDateIndexIdleEnabled] = useState(false);
+  const [dateIndexBusy, setDateIndexBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"ok" | "error" | "info">("info");
   const [aiConfigMessage, setAiConfigMessage] = useState("");
@@ -195,6 +204,10 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
       .then(setQuickCaptureTopEntryEnabledState)
       .catch(() => undefined);
   }, [desktop]);
+
+  useEffect(() => {
+    setDateIndexIdleEnabled(getConversationDateIndexPreference().idleCompletionEnabled);
+  }, []);
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -296,6 +309,38 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
       setMessage(getSafeErrorMessage(error, "无法更新顶部快速记录入口。"));
     } finally {
       setQuickCaptureTopEntryBusy(false);
+    }
+  };
+
+  const changeDateIndexIdleCompletion = async (enabled: boolean) => {
+    if (!desktop || dateIndexBusy) return;
+    setDateIndexIdleEnabled(enabled);
+    saveConversationDateIndexPreference({ idleCompletionEnabled: enabled });
+    if (enabled) {
+      startConversationDateIndexCompletion();
+      setMessageType("ok");
+      setMessage("空闲补全已开启；完成一次主动扫描后，Daymark 会在后台补全轻量日期索引。");
+      return;
+    }
+    await pauseConversationDateIndexCompletion();
+    setMessageType("info");
+    setMessage("空闲补全已关闭；按日期扫描仍会按需核对并缓存结果。");
+  };
+
+  const clearDateIndex = async () => {
+    if (!desktop || dateIndexBusy) return;
+    setDateIndexBusy(true);
+    try {
+      await pauseConversationDateIndexCompletion();
+      await clearConversationDateIndex();
+      saveConversationDateIndexPreference({ userScanCompleted: false });
+      setMessageType("ok");
+      setMessage("会话日期索引已清除；下次按日期扫描时会重新核对。");
+    } catch (error) {
+      setMessageType("error");
+      setMessage(getSafeErrorMessage(error, "无法清除会话日期索引。"));
+    } finally {
+      setDateIndexBusy(false);
     }
   };
 
@@ -551,6 +596,43 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
                 <Bot size={14} aria-hidden="true" />
                 配置 AI
               </button>
+            </div>
+          </section>
+
+          <section className="section-surface p-0">
+            <div className="flex min-h-[88px] min-w-0 flex-wrap items-center gap-3 px-4 py-3 sm:flex-nowrap">
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] border border-line bg-panel text-ink/62" aria-hidden="true">
+                  <Database size={17} />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-ink">会话日期索引</h3>
+                  <p className="mt-1 text-xs leading-5 text-ink/46">
+                    按日期扫描会在本地缓存时间戳和消息数量，不保存对话正文。空闲补全默认关闭。
+                  </p>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                <label className="flex items-center gap-2 text-xs text-ink/68">
+                  <input
+                    type="checkbox"
+                    checked={dateIndexIdleEnabled}
+                    disabled={!desktop || dateIndexBusy}
+                    onChange={(event) => void changeDateIndexIdleCompletion(event.target.checked)}
+                    className="control-checkbox"
+                  />
+                  空闲时补全
+                </label>
+                <button
+                  type="button"
+                  className="secondary-action action-standard text-xs"
+                  disabled={!desktop || dateIndexBusy}
+                  onClick={() => void clearDateIndex()}
+                >
+                  {dateIndexBusy ? <RefreshCw size={14} className="animate-spin" /> : <XCircle size={14} />}
+                  清除索引
+                </button>
+              </div>
             </div>
           </section>
 
@@ -1014,7 +1096,7 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, SettingsPanelProps>
         </div>
         </AiConnectionConfigDialog>
           </div>
-          <aside className="space-y-5 pr-1 xl:min-h-0 xl:overflow-y-auto xl:scrollbar-thin">
+          <aside className="space-y-0 pr-1 xl:min-h-0 xl:overflow-y-auto xl:scrollbar-thin">
             <UsageHelp
               demoLibraryState={demoLibraryState}
               onInstallDemoLibrary={onInstallDemoLibrary}
@@ -1166,7 +1248,7 @@ function UsageHelp({
         <CircleHelp size={15} />
         重新查看使用引导
       </button>
-      <div className="border-t border-line pt-3">
+      <div className="border-t border-line pt-5">
         <p className="text-xs leading-5 text-ink/48">
           示例资料：{demoLibraryState.installed ? `${demoLibraryState.itemCount} 条资料` : "未安装"}
         </p>
@@ -1234,9 +1316,9 @@ function CodexProbePanel() {
       const result = await probeConversationSources();
       setProbes(result);
       const found = result.filter((probe) => probe.exists).length;
-      setMessage(`已完成只读预检，找到 ${found} 个可访问来源。`);
+      setMessage(`已检查本机来源，找到 ${found} 个可访问来源。`);
     } catch (error) {
-      setMessage(getSafeErrorMessage(error, "预检失败，请稍后再试。"));
+      setMessage(getSafeErrorMessage(error, "检查失败，请稍后再试。"));
       setProbes([]);
     } finally {
       probingRef.current = false;
@@ -1249,7 +1331,7 @@ function CodexProbePanel() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">AI Sources</p>
-          <h3 className="mt-1 text-base font-semibold text-ink">AI 对话来源预检</h3>
+          <h3 className="mt-1 text-base font-semibold text-ink">检查本机来源</h3>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-ink/52">
             先看看本机是否有可用的 Codex 与 Claude Code 对话痕迹。本轮只看路径、大小和修改时间，不读取正文，不上传内容，也不写入记忆。
           </p>
@@ -1260,19 +1342,19 @@ function CodexProbePanel() {
           onClick={runProbe}
         >
           {probing ? <RefreshCw size={16} className="animate-spin" /> : <FolderSearch size={16} />}
-          {probing ? "预检中" : "只读预检"}
+          {probing ? "检查中" : "检查本机来源"}
         </button>
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">
         <CodexPrinciple icon={ShieldCheck} title="只读" text="不修改 Codex 或 Claude Code 文件，也不移动任何记录。" />
-        <CodexPrinciple icon={HardDrive} title="本机" text="预检发生在本机桌面壳里，Web 模式不启用。" />
-        <CodexPrinciple icon={Database} title="不总结" text="本轮不调用 AI，只判断未来是否可做。" />
+        <CodexPrinciple icon={HardDrive} title="本机" text="检查在本机桌面端完成，Web 模式不启用。" />
+        <CodexPrinciple icon={Database} title="不调用 AI" text="只检查来源信息，不读取正文或生成内容。" />
       </div>
 
       {!desktop && (
         <div className="rounded-[8px] border border-line bg-panel px-3 py-2 text-sm leading-6 text-ink/70">
-          AI 对话来源预检需要桌面端运行。浏览器模式下不会读取本机路径。
+          本机来源检查需要桌面端运行。浏览器模式下不会读取本机路径。
         </div>
       )}
 
@@ -1284,7 +1366,7 @@ function CodexProbePanel() {
 
       {probes.length > 0 && (
         <ScrollableResultPanel
-          title="预检结果"
+          title="检查结果"
           count={`${probes.filter((probe) => probe.exists).length} / ${probes.length} 可访问`}
           maxHeightClass="max-h-[280px]"
           bodyClassName="space-y-1.5"
@@ -1325,7 +1407,7 @@ function CodexProbePanel() {
       )}
 
       <div className="rounded-[8px] border border-line bg-panel/80 p-3 text-sm leading-6 text-ink/58">
-        后续若正式开启，会采用“选择日期范围 → 手动生成每日回顾 → 产生待确认记忆 → 你审核后写入长期记忆”的流程。
+        回顾流程由你手动开始；长期记忆建议需要确认后才会写入文档。
       </div>
     </section>
   );

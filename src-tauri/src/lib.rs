@@ -9,16 +9,16 @@ mod text_utils;
 use quick_capture::{
     close_quick_capture_panel_from_escape, current_panel_is_saving, current_panel_token_option,
     dispatch_quick_capture_on_main, hide_main, hide_quick_capture_panel_impl,
-    hide_quick_capture_window, hide_quick_capture_windows, main_is_available_for_hotzone,
-    load_quick_capture_preferences, prewarm_quick_capture_windows, quick_capture_degraded,
-    quick_capture_escape_shortcut, quick_capture_panel_is_active, quick_capture_panel_should_be_preserved,
-    quick_capture_paused, reconcile_quick_capture_window_destroyed,
-    remember_primary_quick_capture_monitor, route_second_launch_to_main,
-    run_quick_capture_on_main, schedule_main_minimized_check,
+    hide_quick_capture_window, hide_quick_capture_windows, load_quick_capture_preferences,
+    main_is_available_for_hotzone, prewarm_quick_capture_windows, quick_capture_degraded,
+    quick_capture_escape_shortcut, quick_capture_panel_is_active,
+    quick_capture_panel_should_be_preserved, quick_capture_paused,
+    reconcile_quick_capture_window_destroyed, remember_primary_quick_capture_monitor,
+    route_second_launch_to_main, run_quick_capture_on_main, schedule_main_minimized_check,
     set_quick_capture_shortcut_error, set_quick_capture_state, setup_tray,
     show_quick_capture_hotzone_for_hidden_main_impl, show_quick_capture_panel_impl,
-    start_quick_capture_lifecycle_watchdog,
-    QuickCaptureState, QUICK_CAPTURE_HOTZONE_LABEL, QUICK_CAPTURE_PANEL_LABEL,
+    start_quick_capture_lifecycle_watchdog, QuickCaptureState, QUICK_CAPTURE_HOTZONE_LABEL,
+    QUICK_CAPTURE_PANEL_LABEL,
 };
 use std::thread;
 use std::time::Duration;
@@ -95,8 +95,14 @@ mod tests {
         assert!(finalized.truncated);
         assert!(finalized.redacted);
         assert!(finalized.text.contains("已脱"));
-        assert!(finalized.warnings.iter().any(|warning| warning.contains("脱敏")));
-        assert!(finalized.warnings.iter().any(|warning| warning.contains("截断")));
+        assert!(finalized
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("脱敏")));
+        assert!(finalized
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("截断")));
     }
 
     #[test]
@@ -135,8 +141,10 @@ mod tests {
     #[test]
     fn ai_key_account_scopes_provider_and_base_url() {
         let deepseek = ai_api_key_account("deepseek", "https://api.example.test").unwrap();
-        let compatible = ai_api_key_account("openai-compatible", "https://api.example.test").unwrap();
-        let anthropic = ai_api_key_account("anthropic-messages", "https://api.example.test").unwrap();
+        let compatible =
+            ai_api_key_account("openai-compatible", "https://api.example.test").unwrap();
+        let anthropic =
+            ai_api_key_account("anthropic-messages", "https://api.example.test").unwrap();
         let other_url = ai_api_key_account("deepseek", "https://other.example.test").unwrap();
 
         assert_ne!(deepseek, compatible);
@@ -151,12 +159,13 @@ mod tests {
     #[test]
     fn session_delta_reads_only_complete_new_jsonl_lines() {
         let path = std::env::temp_dir().join(format!("daymark-delta-{}.jsonl", std::process::id()));
-        let first = r#"{"payload":{"type":"message","role":"user","content":[{"text":"first note"}]}}"#;
+        let first =
+            r#"{"payload":{"type":"message","role":"user","content":[{"text":"first note"}]}}"#;
         let second = r#"{"payload":{"type":"message","role":"assistant","content":[{"text":"api_key=sk-test-secret-1234567890"}]}}"#;
         fs::write(&path, format!("{}\n{} incomplete", first, second)).unwrap();
 
         let session = test_codex_session(&path);
-        let delta = read_session_delta(&session, 0, None).unwrap();
+        let delta = read_session_delta(&session, 0, None, None).unwrap();
 
         assert_eq!(delta.message_count, 1);
         assert!(delta.transcript.contains("first note"));
@@ -164,7 +173,7 @@ mod tests {
         assert_eq!(delta.next_read_offset, first.len() as u64 + 1);
 
         fs::write(&path, format!("{}\n{}\n", first, second)).unwrap();
-        let delta = read_session_delta(&session, delta.next_read_offset, None).unwrap();
+        let delta = read_session_delta(&session, delta.next_read_offset, None, None).unwrap();
 
         assert_eq!(delta.message_count, 1);
         assert!(delta.redacted);
@@ -175,12 +184,14 @@ mod tests {
 
     #[test]
     fn session_delta_resets_when_offset_is_beyond_file_length() {
-        let path = std::env::temp_dir().join(format!("daymark-delta-reset-{}.jsonl", std::process::id()));
-        let line = r#"{"payload":{"type":"message","role":"user","content":[{"text":"after rewrite"}]}}"#;
+        let path =
+            std::env::temp_dir().join(format!("daymark-delta-reset-{}.jsonl", std::process::id()));
+        let line =
+            r#"{"payload":{"type":"message","role":"user","content":[{"text":"after rewrite"}]}}"#;
         fs::write(&path, format!("{}\n", line)).unwrap();
 
         let session = test_codex_session(&path);
-        let delta = read_session_delta(&session, 10_000, None).unwrap();
+        let delta = read_session_delta(&session, 10_000, None, None).unwrap();
 
         assert!(delta.reset);
         assert_eq!(delta.previous_read_offset, 0);
@@ -195,6 +206,8 @@ mod tests {
             source_kind: "codex".into(),
             source_label: "Codex".into(),
             date: "2026-07-09".into(),
+            started_date: "2026-07-09".into(),
+            last_active_date: "2026-07-09".into(),
             path: path.to_string_lossy().into_owned(),
             size_bytes: fs::metadata(path).unwrap().len(),
             modified_at: 0,
@@ -215,7 +228,8 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    let quick_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+                    let quick_shortcut =
+                        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
                     if shortcut == &quick_shortcut && event.state() == ShortcutState::Pressed {
                         dispatch_quick_capture_on_main(app, |app_handle| {
                             let _ = show_quick_capture_panel_impl(&app_handle);
@@ -244,7 +258,8 @@ pub fn run() {
             }
             main_window_state::schedule_main_window_show_fallback(app.handle().clone());
             setup_tray(app)?;
-            let quick_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+            let quick_shortcut =
+                Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
             if let Err(error) = app.global_shortcut().register(quick_shortcut) {
                 let app_handle = app.handle().clone();
                 set_quick_capture_shortcut_error(Some(error.to_string()));
@@ -375,6 +390,9 @@ pub fn run() {
             conversation_sessions::list_conversation_sessions_by_date,
             conversation_sessions::index_codex_sessions,
             conversation_sessions::index_conversation_sessions,
+            conversation_sessions::scan_conversation_sessions_exact,
+            conversation_sessions::complete_conversation_date_index,
+            conversation_sessions::clear_conversation_date_index,
             conversation_sessions::read_selected_codex_sessions,
             conversation_sessions::read_selected_conversation_sessions,
             conversation_sessions::read_conversation_session_deltas,

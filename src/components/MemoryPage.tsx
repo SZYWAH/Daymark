@@ -3,12 +3,15 @@ import {
   BookOpenText,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   History,
   Maximize2,
+  PanelRightOpen,
   RefreshCw,
   Save,
   Search,
+  Settings2,
   ShieldCheck,
   Sparkles,
   Square,
@@ -18,31 +21,54 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getEffectiveAiSettings, streamSummarizeConversationReview, type CodexReviewProgress } from "../ai/deepseek";
 import { ConversationSessionPreviewOverlay } from "./ConversationSessionPreviewOverlay";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { DatePickerPopover } from "./DatePickerPopover";
 import { FocusOverlay } from "./FocusOverlay";
 import { MetricItem, PageMetricColumn, PageWorkspace } from "./PageWorkspace";
 import { BoundedPreview, ResultRow, ScrollableResultPanel } from "./ResultPanels";
+import type { ReviewGenerationRuntime } from "./ReviewGenerationWorkspace";
 import { SelectMenu } from "./SelectMenu";
 import { toDateKey } from "../lib/date";
+import { toConversationReadProgressView } from "../lib/conversationReadProgress";
+import {
+  createConversationReviewFingerprint,
+  shouldWarnLargeNoDateReview,
+} from "../lib/conversationReviewWarning";
+import { getMemoryPatchSelectionAfterRemoval, resolveMemoryPatchSelection } from "../lib/memoryPatchSelection";
 import { getSafeErrorMessage } from "../lib/redaction";
+import { formatMemorySuggestionResult, formatReviewGenerationResult } from "../lib/reviewGenerationResult";
+import { isMemorySuggestionSourceOutdated } from "../lib/memorySuggestion";
+import {
+  createConversationScanKey,
+  isConversationScanActive,
+  type ConversationScanQuery,
+  type ConversationScanRuntime,
+} from "../lib/conversationScanTask";
+import {
+  isConversationSourceLocked,
+  resolveConversationReviewPrimaryAction,
+} from "../lib/conversationReviewWorkbench";
 import {
   cancelConversationReviewJob,
-  indexConversationSessions,
   isDesktopRuntime,
   readSelectedConversationSessions,
 } from "../lib/desktop";
 import type {
   AiSettings,
   CodexDailyReview,
-  CodexReviewInput,
   CodexSessionIndex,
   ConversationGenerationDraft,
+  ConversationReviewGenerationRequest,
   ConversationSourceKind,
   DailyReviewReplacementDraft,
   MemoryCard,
   MemoryDocument,
   MemoryPatchDraft,
+  MemorySuggestionCheckpointStatus,
+  MemorySuggestionGenerationResult,
+  MemorySuggestionStatus,
   MemorySubView,
+  ReviewMemorySuggestionSource,
   RollingWorkReview,
   SummaryReport,
 } from "../types";
@@ -51,6 +77,8 @@ type GenerateCodexReviewResult = {
   review: CodexDailyReview;
   patchDraft?: MemoryPatchDraft;
   replacementDraft?: boolean;
+  replacementDraftId?: string;
+  memorySuggestionStatus: MemorySuggestionStatus;
 };
 
 const MEMORY_DOCUMENT_DRAFT_KEY = "personal-knowledge-base:memory-document-draft:v1";
@@ -78,29 +106,40 @@ type MemoryPageProps = {
   codexSessionIndex: CodexSessionIndex[];
   dailyReviewDrafts: DailyReviewReplacementDraft[];
   conversationGenerationDrafts: ConversationGenerationDraft[];
+  reviewGenerationTask: ReviewGenerationRuntime | null;
+  conversationScanQuery: ConversationScanQuery;
+  conversationScanTask: ConversationScanRuntime | null;
+  lastCompletedConversationScanKey: string;
   settings: AiSettings | null;
   initialSubView?: MemorySubView;
+  onSubViewChange?: (subView: MemorySubView) => void;
   initialMemoryId?: string;
   initialReviewId?: string;
   initialReviewDraftId?: string;
   initialSummaryId?: string;
   mainWindowMaximized: boolean;
   onUpdateMemory: (id: string, patch: Partial<MemoryCard>) => Promise<void>;
-  onGenerateCodexReview: (
-    input: CodexReviewInput,
-    onProgress?: (progress: CodexReviewProgress) => void,
-    signal?: AbortSignal,
-  ) => Promise<GenerateCodexReviewResult>;
   onGenerateCombinedReview: (
     reviews: CodexDailyReview[],
     onProgress?: (progress: CodexReviewProgress) => void,
     signal?: AbortSignal,
   ) => Promise<GenerateCodexReviewResult>;
-  onSaveGenerationDraft: (
-    draft: Omit<ConversationGenerationDraft, "id" | "createdAt" | "updatedAt">,
-  ) => Promise<void>;
-  onReplaceCodexSessionIndex: (records: CodexSessionIndex[]) => Promise<void>;
+  onStartReviewGeneration: (request: ConversationReviewGenerationRequest) => Promise<void>;
+  onOpenReviewGeneration: () => void;
+  onConversationScanQueryChange: (query: ConversationScanQuery) => void;
+  onStartConversationScan: (query: ConversationScanQuery) => Promise<void>;
+  onOpenConversationScan: () => void;
+  onOpenSettings: () => void;
+  onResumeReviewGeneration: (draftId: string) => Promise<void>;
+  onRestartReviewGeneration: (draftId: string) => Promise<void>;
+  onDeleteReviewGeneration: (draftId: string) => Promise<void>;
   onUpdateCodexReview: (id: string, patch: Partial<CodexDailyReview>) => Promise<void>;
+  onUpdateDailyReviewDraft: (id: string, patch: Partial<DailyReviewReplacementDraft>) => Promise<DailyReviewReplacementDraft>;
+  onGenerateMemorySuggestion: (
+    source: ReviewMemorySuggestionSource,
+    onProgress?: (progress: CodexReviewProgress) => void,
+    signal?: AbortSignal,
+  ) => Promise<MemorySuggestionGenerationResult>;
   onApplyDailyReviewDraft: (id: string) => Promise<void>;
   onIgnoreDailyReviewDraft: (id: string) => Promise<void>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
@@ -123,19 +162,32 @@ export function MemoryPage({
   codexSessionIndex,
   dailyReviewDrafts,
   conversationGenerationDrafts,
+  reviewGenerationTask,
+  conversationScanQuery,
+  conversationScanTask,
+  lastCompletedConversationScanKey,
   settings,
   initialSubView,
+  onSubViewChange,
   initialMemoryId,
   initialReviewId,
   initialReviewDraftId,
   initialSummaryId,
   mainWindowMaximized,
   onUpdateMemory,
-  onGenerateCodexReview,
   onGenerateCombinedReview,
-  onSaveGenerationDraft,
-  onReplaceCodexSessionIndex,
+  onStartReviewGeneration,
+  onOpenReviewGeneration,
+  onConversationScanQueryChange,
+  onStartConversationScan,
+  onOpenConversationScan,
+  onOpenSettings,
+  onResumeReviewGeneration,
+  onRestartReviewGeneration,
+  onDeleteReviewGeneration,
   onUpdateCodexReview,
+  onUpdateDailyReviewDraft,
+  onGenerateMemorySuggestion,
   onApplyDailyReviewDraft,
   onIgnoreDailyReviewDraft,
   onArchiveRollingWorkReview,
@@ -151,8 +203,13 @@ export function MemoryPage({
   const todayKey = toDateKey(new Date());
   const todayReviews = codexReviews.filter((review) => review.date === todayKey);
   const todayReviewIds = new Set(todayReviews.map((review) => review.id));
+  const todayReviewDraftIds = new Set(
+    dailyReviewDrafts.filter((draft) => draft.date === todayKey).map((draft) => draft.id),
+  );
   const todayPatchCount = pendingPatchDrafts.filter(
-    (draft) => draft.sourceReviewId && todayReviewIds.has(draft.sourceReviewId),
+    (draft) =>
+      (draft.sourceReviewId && todayReviewIds.has(draft.sourceReviewId))
+      || (draft.sourceReviewDraftId && todayReviewDraftIds.has(draft.sourceReviewDraftId)),
   ).length;
 
   useEffect(() => {
@@ -180,7 +237,10 @@ export function MemoryPage({
       <div className="flex h-full min-h-0 flex-col px-6 pb-24 pt-4 lg:pb-4">
         <MemorySubViewNav
           active={subView}
-          onChange={setSubView}
+          onChange={(nextSubView) => {
+            setSubView(nextSubView);
+            onSubViewChange?.(nextSubView);
+          }}
           archiveCount={codexReviews.filter((review) => review.reviewKind !== "auto-work").length + reports.length + rollingWorkReviews.length}
           patchCount={pendingPatchDrafts.length}
           legacyCount={memories.filter((memory) => memory.status !== "ignored").length}
@@ -202,12 +262,15 @@ export function MemoryPage({
                 codexReviews={codexReviews}
                 rollingWorkReviews={rollingWorkReviews}
                 dailyReviewDrafts={dailyReviewDrafts}
+                memoryPatchDrafts={pendingPatchDrafts}
                 targetReviewId={initialReviewId}
                 targetReviewDraftId={initialReviewDraftId}
                 targetSummaryId={initialSummaryId}
                 onOpenCodexReview={setActiveReview}
                 onOpenSummaryReport={setActiveReport}
                 onGenerateCombinedReview={onGenerateCombinedReview}
+                onUpdateDailyReviewDraft={onUpdateDailyReviewDraft}
+                onGenerateMemorySuggestion={onGenerateMemorySuggestion}
                 onApplyDailyReviewDraft={onApplyDailyReviewDraft}
                 onIgnoreDailyReviewDraft={onIgnoreDailyReviewDraft}
                 onArchiveRollingWorkReview={onArchiveRollingWorkReview}
@@ -216,14 +279,16 @@ export function MemoryPage({
           )}
 
           {subView === "patches" && (
-            <div className="grid h-full min-h-0 gap-4 overflow-y-auto scrollbar-thin xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="h-full min-h-0 overflow-hidden">
               <MemoryPatchDraftsPanel
                 drafts={pendingPatchDrafts}
                 memoryDocument={memoryDocument}
+                reviews={codexReviews}
+                reviewDrafts={dailyReviewDrafts}
+                onGenerateMemorySuggestion={onGenerateMemorySuggestion}
                 onApply={onApplyMemoryPatch}
                 onIgnore={onIgnoreMemoryPatch}
               />
-              <MemoryPrinciples />
             </div>
           )}
 
@@ -235,9 +300,19 @@ export function MemoryPage({
                   reviews={codexReviews}
                   indexedSessions={codexSessionIndex}
                   generationDrafts={conversationGenerationDrafts}
-                  onReplaceIndex={onReplaceCodexSessionIndex}
-                  onGenerateCodexReview={onGenerateCodexReview}
-                  onSaveGenerationDraft={onSaveGenerationDraft}
+                  reviewGenerationTask={reviewGenerationTask}
+                  scanQuery={conversationScanQuery}
+                  scanTask={conversationScanTask}
+                  lastCompletedScanKey={lastCompletedConversationScanKey}
+                  onStartReviewGeneration={onStartReviewGeneration}
+                  onOpenReviewGeneration={onOpenReviewGeneration}
+                  onScanQueryChange={onConversationScanQueryChange}
+                  onStartScan={onStartConversationScan}
+                  onOpenScan={onOpenConversationScan}
+                  onOpenSettings={onOpenSettings}
+                  onResumeReviewGeneration={onResumeReviewGeneration}
+                  onRestartReviewGeneration={onRestartReviewGeneration}
+                  onDeleteReviewGeneration={onDeleteReviewGeneration}
                 />
               </div>
               {mainWindowMaximized ? (
@@ -266,6 +341,8 @@ export function MemoryPage({
         <ReviewReaderOverlay
           review={activeReview}
           settings={settings}
+          memoryPatchDraft={pendingPatchDrafts.find((draft) => draft.sourceReviewId === activeReview.id)}
+          onGenerateMemorySuggestion={onGenerateMemorySuggestion}
           onClose={() => setActiveReview(null)}
           onSave={onUpdateCodexReview}
         />
@@ -577,11 +654,16 @@ function parseMemoryMarkdown(content: string) {
 
 function MemoryPatchDraftsPanel({
   drafts,
+  reviews,
+  reviewDrafts,
   memoryDocument,
   onApply,
   onIgnore,
+  onGenerateMemorySuggestion,
 }: {
   drafts: MemoryPatchDraft[];
+  reviews: CodexDailyReview[];
+  reviewDrafts: DailyReviewReplacementDraft[];
   memoryDocument: MemoryDocument | null;
   onApply: (
     id: string,
@@ -589,12 +671,19 @@ function MemoryPatchDraftsPanel({
     options?: { allowStale?: boolean; confirmedDocumentUpdatedAt?: string; confirmedDocumentContent?: string },
   ) => Promise<void>;
   onIgnore: (id: string) => Promise<void>;
+  onGenerateMemorySuggestion: (
+    source: ReviewMemorySuggestionSource,
+    onProgress?: (progress: CodexReviewProgress) => void,
+    signal?: AbortSignal,
+  ) => Promise<MemorySuggestionGenerationResult>;
 }) {
   const [editing, setEditing] = useState<Record<string, string>>({});
+  const [selectedDraftId, setSelectedDraftId] = useState("");
   const [busyId, setBusyId] = useState("");
-  const [pendingApplyId, setPendingApplyId] = useState("");
-  const [pendingStaleApplyId, setPendingStaleApplyId] = useState("");
+  const [pendingAction, setPendingAction] = useState<{ draft: MemoryPatchDraft; kind: "apply" | "ignore" } | null>(null);
   const [message, setMessage] = useState("");
+  const [suggestionBusyId, setSuggestionBusyId] = useState("");
+  const [principlesOpen, setPrinciplesOpen] = useState(false);
   const busyRef = useRef("");
 
   useEffect(() => {
@@ -608,7 +697,46 @@ function MemoryPatchDraftsPanel({
       writeMemoryPatchEditDrafts(next);
       return next;
     });
+    setSelectedDraftId((current) => resolveMemoryPatchSelection(drafts.map((draft) => draft.id), current));
   }, [drafts]);
+
+  const selectedDraftIndex = Math.max(0, drafts.findIndex((draft) => draft.id === selectedDraftId));
+  const selectedDraft = drafts[selectedDraftIndex];
+  const selectedSource = useMemo<ReviewMemorySuggestionSource | null>(() => {
+    if (!selectedDraft) return null;
+    if (selectedDraft.sourceReviewDraftId) {
+      const reviewDraft = reviewDrafts.find((draft) => draft.id === selectedDraft.sourceReviewDraftId);
+      return reviewDraft ? { kind: "replacement", draft: reviewDraft } : null;
+    }
+    if (selectedDraft.sourceReviewId) {
+      const review = reviews.find((item) => item.id === selectedDraft.sourceReviewId);
+      return review ? { kind: "review", review } : null;
+    }
+    return null;
+  }, [reviewDrafts, reviews, selectedDraft]);
+  const selectedSourceTitle = selectedSource?.kind === "review" ? selectedSource.review.title : selectedSource?.draft.title;
+  const selectedSourceContent = selectedSource?.kind === "review" ? selectedSource.review.content : selectedSource?.draft.content;
+  const selectedSourceDate = selectedSource?.kind === "review" ? selectedSource.review.date : selectedSource?.draft.date;
+  const selectedSourceLabel = selectedSource?.kind === "review" ? selectedSource.review.sourceLabel : selectedSource?.draft.sourceLabel;
+  const selectedSourceOutdated = Boolean(
+    selectedDraft
+      && selectedSourceTitle !== undefined
+      && selectedSourceContent !== undefined
+      && isMemorySuggestionSourceOutdated(
+        selectedDraft.sourceReviewContentVersion,
+        selectedSourceTitle,
+        selectedSourceContent,
+      ),
+  );
+
+  useEffect(() => {
+    if (!principlesOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPrinciplesOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [principlesOpen]);
 
   const updateDraft = (draft: MemoryPatchDraft, value: string) => {
     setEditing((current) => {
@@ -620,20 +748,10 @@ function MemoryPatchDraftsPanel({
 
   const applyDraft = async (draft: MemoryPatchDraft) => {
     if (busyRef.current) return;
+    const nextSelectedId = getMemoryPatchSelectionAfterRemoval(drafts.map((item) => item.id), draft.id);
     const documentUpdatedAt = memoryDocument?.updatedAt ?? "";
     const draftBaselineAt = draft.createdAt || draft.updatedAt;
     const isStaleAgainstDocument = Boolean(documentUpdatedAt && draftBaselineAt && documentUpdatedAt > draftBaselineAt);
-    if (pendingApplyId !== draft.id) {
-      setPendingApplyId(draft.id);
-      setPendingStaleApplyId("");
-      setMessage("这会改写长期记忆文档。请确认内容无误后，再次点击“确认写入”。");
-      return;
-    }
-    if (isStaleAgainstDocument && pendingStaleApplyId !== draft.id) {
-      setPendingStaleApplyId(draft.id);
-      setMessage("长期记忆文档在这条建议生成后更新过。确认要覆盖当前文档后，再点击一次。");
-      return;
-    }
     busyRef.current = draft.id;
     setBusyId(draft.id);
     setMessage("");
@@ -648,11 +766,11 @@ function MemoryPatchDraftsPanel({
         writeMemoryPatchEditDrafts(next);
         return next;
       });
-      setMessage("记忆文档已按你的确认更新。");
-      setPendingApplyId("");
-      setPendingStaleApplyId("");
+      setSelectedDraftId(nextSelectedId);
+      setMessage("长期记忆已更新。");
+      setPendingAction(null);
     } catch (error) {
-      setMessage(getSafeErrorMessage(error, "应用建议失败。"));
+      setMessage(getSafeErrorMessage(error, "写入长期记忆失败。"));
     } finally {
       busyRef.current = "";
       setBusyId("");
@@ -661,10 +779,9 @@ function MemoryPatchDraftsPanel({
 
   const ignoreDraft = async (draft: MemoryPatchDraft) => {
     if (busyRef.current) return;
+    const nextSelectedId = getMemoryPatchSelectionAfterRemoval(drafts.map((item) => item.id), draft.id);
     busyRef.current = draft.id;
     setBusyId(draft.id);
-    setPendingApplyId("");
-    setPendingStaleApplyId("");
     setMessage("");
     try {
       await onIgnore(draft.id);
@@ -673,68 +790,193 @@ function MemoryPatchDraftsPanel({
         writeMemoryPatchEditDrafts(next);
         return next;
       });
-      setMessage("已忽略这条建议。");
+      setSelectedDraftId(nextSelectedId);
+      setMessage("已舍弃这条建议。");
+      setPendingAction(null);
     } catch (error) {
-      setMessage(getSafeErrorMessage(error, "忽略建议失败。"));
+      setMessage(getSafeErrorMessage(error, "舍弃建议失败。"));
     } finally {
       busyRef.current = "";
       setBusyId("");
     }
   };
 
-  return (
-    <section className="section-surface border-copper/25 bg-copper/5">
-      <div className="mb-3">
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Memory Patch</p>
-        <h3 className="mt-1 text-base font-semibold text-ink">待审核的记忆修改</h3>
-        <p className="mt-1 text-xs leading-5 text-ink/45">AI 只提出修改建议，真正写入长期记忆前仍由你审一遍。</p>
-      </div>
+  const regenerateSuggestion = async () => {
+    if (!selectedDraft || !selectedSource || suggestionBusyId) return;
+    setSuggestionBusyId(selectedDraft.id);
+    setMessage("正在重新生成长期记忆建议。");
+    try {
+      const result = await onGenerateMemorySuggestion(selectedSource);
+      setMessage(formatMemorySuggestionResult(result));
+    } catch (error) {
+      setMessage(getSafeErrorMessage(error, "长期记忆建议未生成，可稍后重试。"));
+    } finally {
+      setSuggestionBusyId("");
+    }
+  };
 
-      {drafts.length === 0 ? (
-        <div className="rounded-[8px] border border-dashed border-line bg-panel/70 p-4 text-sm leading-6 text-ink/45">
-          暂时没有待审核的修改建议。生成 Codex 回顾后，这里会出现可编辑的合并草稿。
+  return (
+    <section className="relative flex h-full min-h-[520px] flex-col overflow-hidden bg-paper xl:min-h-0">
+      <header className="flex shrink-0 items-end justify-between gap-4 border-b border-line px-5 pb-4 pt-2 pr-16">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Memory Review</p>
+          <h3 className="mt-1 text-lg font-semibold text-ink">记忆审核</h3>
+          <p className="mt-1 text-xs leading-5 text-ink/45">审阅并确认真正值得长期保留的信息。</p>
+        </div>
+        {drafts.length > 0 && (
+          <div className="flex shrink-0 items-center gap-2" aria-label="待审核建议切换">
+            <button
+              type="button"
+              className="soft-button action-compact size-8 p-0 disabled:opacity-35"
+              aria-label="上一条建议"
+              title="上一条建议"
+              disabled={selectedDraftIndex <= 0 || Boolean(busyId)}
+              onClick={() => setSelectedDraftId(drafts[selectedDraftIndex - 1]?.id ?? selectedDraftId)}
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <span className="min-w-14 text-center text-xs tabular-nums text-ink/55">
+              {selectedDraftIndex + 1} / {drafts.length}
+            </span>
+            <button
+              type="button"
+              className="soft-button action-compact size-8 p-0 disabled:opacity-35"
+              aria-label="下一条建议"
+              title="下一条建议"
+              disabled={selectedDraftIndex >= drafts.length - 1 || Boolean(busyId)}
+              onClick={() => setSelectedDraftId(drafts[selectedDraftIndex + 1]?.id ?? selectedDraftId)}
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
+        )}
+      </header>
+
+      {drafts.length === 0 || !selectedDraft ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-16 pr-20 text-center">
+          <div className="max-w-md">
+            <BookOpenText size={24} className="mx-auto text-ink/35" />
+            <h4 className="mt-4 text-base font-semibold text-ink">没有待审核建议</h4>
+            <p className="mt-2 text-sm leading-7 text-ink/45">生成工作回顾后，值得长期保留的信息会在这里等待确认。</p>
+          </div>
         </div>
       ) : (
-        <div className="space-y-3">
-          {drafts.map((draft) => (
-            <article key={draft.id} className="rounded-[8px] border border-line bg-surface p-3 shadow-card">
-              <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <h4 className="text-sm font-semibold text-ink">{draft.title}</h4>
-                  <p className="mt-1 text-xs leading-5 text-ink/48">{draft.rationale}</p>
+        <div className="flex min-h-0 flex-1 px-5 py-5 pr-16">
+          <article className="mx-auto flex min-h-[360px] w-full max-w-[920px] flex-1 flex-col overflow-hidden border border-line bg-surface shadow-card">
+            <div className="flex shrink-0 flex-wrap items-start justify-between gap-4 border-b border-line px-7 py-5">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink/42">
+                  <span>{selectedSourceDate || "来源日期未知"}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{selectedSourceLabel || (selectedDraft.sourceReviewDraftId ? "待确认回顾" : "工作回顾")}</span>
                 </div>
+                <h4 className="mt-2 text-xl font-semibold text-ink">{selectedDraft.title}</h4>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-ink/52">{selectedDraft.rationale}</p>
+                {selectedSourceOutdated && (
+                  <p className="mt-3 text-xs font-medium text-copper">来源回顾已修改，这条建议仍基于修改前的内容。</p>
+                )}
+                {!selectedSource && selectedDraft.sourceReviewDraftId && (
+                  <p className="mt-3 text-xs text-ink/45">来源版本已舍弃，这条建议仍可独立审核。</p>
+                )}
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {selectedSourceOutdated && (
+                  <button
+                    type="button"
+                    className="soft-button action-compact disabled:opacity-55"
+                    disabled={Boolean(busyId || suggestionBusyId)}
+                    onClick={() => void regenerateSuggestion()}
+                  >
+                    {suggestionBusyId ? <RefreshCw size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                    重新生成建议
+                  </button>
+                )}
                 <span className="rounded-full border border-copper/30 bg-copper/10 px-2.5 py-1 text-[11px] font-medium text-copper">
                   待确认
                 </span>
               </div>
-              <textarea
-                value={editing[draft.id] ?? draft.proposedContent}
-                onChange={(event) => updateDraft(draft, event.target.value)}
-                className="field-control h-32 w-full resize-none overflow-y-auto px-3 py-2 font-mono text-xs leading-6 scrollbar-thin focus:h-[220px]"
-              />
-              <div className="mt-3 flex flex-wrap gap-2">
+            </div>
+            <textarea
+              value={editing[selectedDraft.id] ?? selectedDraft.proposedContent}
+              onChange={(event) => updateDraft(selectedDraft, event.target.value)}
+              className="min-h-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-7 py-6 font-sans text-[15px] leading-[1.8] text-ink/78 outline-none scrollbar-thin focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/55"
+              aria-label={`编辑长期记忆建议：${selectedDraft.title}`}
+            />
+            <div className="flex min-h-[64px] shrink-0 flex-wrap items-center justify-between gap-3 border-t border-line px-6 py-3">
+              <div className="min-h-9 min-w-0 flex-1 text-xs leading-5 text-ink/45" aria-live="polite">
+                {message || (selectedSourceOutdated ? "来源已修改，可重新生成建议。" : "编辑内容会自动保存在本机；确认后才会写入长期记忆。")}
+              </div>
+              <div className="flex flex-wrap gap-2">
                 <button
-                  className="primary-button action-compact disabled:opacity-60"
-                  disabled={Boolean(busyId)}
-                  onClick={() => void applyDraft(draft)}
+                  className="primary-button action-standard disabled:opacity-60"
+                  disabled={Boolean(busyId || suggestionBusyId)}
+                  onClick={() => setPendingAction({ draft: selectedDraft, kind: "apply" })}
                 >
                   <Check size={14} />
-                  {pendingApplyId === draft.id ? "再次确认" : "确认写入"}
+                  写入长期记忆
                 </button>
                 <button
-                  className="danger-action action-compact disabled:opacity-60"
-                  disabled={Boolean(busyId)}
-                  onClick={() => void ignoreDraft(draft)}
+                  className="danger-action action-standard disabled:opacity-60"
+                  disabled={Boolean(busyId || suggestionBusyId)}
+                  onClick={() => setPendingAction({ draft: selectedDraft, kind: "ignore" })}
                 >
                   <X size={14} />
-                  不采用
+                  舍弃
                 </button>
               </div>
-            </article>
-          ))}
+            </div>
+          </article>
         </div>
       )}
-      {message && <p className="mt-2 text-xs text-ink/45">{message}</p>}
+
+      <aside className="absolute inset-y-0 right-0 z-20 flex w-12 flex-col items-center border-l border-line bg-paper pt-4">
+        <button
+          type="button"
+          className="ghost-action icon-action-compact"
+          aria-label="查看审核原则"
+          title="审核原则"
+          aria-expanded={principlesOpen}
+          onClick={() => setPrinciplesOpen((value) => !value)}
+        >
+          <PanelRightOpen size={16} />
+        </button>
+      </aside>
+      {principlesOpen && (
+        <aside className="absolute inset-y-0 right-0 z-30 flex w-[280px] flex-col border-l border-line bg-paper shadow-[-18px_0_44px_rgba(0,0,0,0.18)]">
+          <div className="flex h-14 items-center justify-between border-b border-line px-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-ink">
+              <BookOpenText size={16} />
+              审核原则
+            </div>
+            <button type="button" className="ghost-action icon-action-compact" onClick={() => setPrinciplesOpen(false)} aria-label="收起审核原则" title="收起">
+              <X size={16} />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3 scrollbar-thin">
+            <MemoryPrinciples />
+          </div>
+        </aside>
+      )}
+      <ConfirmDialog
+        open={Boolean(pendingAction)}
+        title={pendingAction?.kind === "apply" ? "写入长期记忆？" : "舍弃这条建议？"}
+        message={pendingAction?.kind === "apply"
+          ? memoryDocument?.updatedAt && (pendingAction.draft.createdAt || pendingAction.draft.updatedAt) && memoryDocument.updatedAt > (pendingAction.draft.createdAt || pendingAction.draft.updatedAt)
+              ? "长期记忆在这条建议生成后更新过。确认后将以当前建议替换对应内容。"
+              : "确认后会更新长期记忆文档。"
+          : "这条待审核建议将被删除，长期记忆保持不变。"}
+        confirmLabel={pendingAction?.kind === "apply" ? "确认写入" : "舍弃建议"}
+        danger={pendingAction?.kind === "ignore"}
+        onCancel={() => setPendingAction(null)}
+        onConfirm={async () => {
+          if (!pendingAction) return;
+          if (pendingAction.kind === "apply") {
+            await applyDraft(pendingAction.draft);
+            return;
+          }
+          await ignoreDraft(pendingAction.draft);
+        }}
+      />
     </section>
   );
 }
@@ -744,50 +986,59 @@ function CodexReviewWorkbench({
   reviews,
   indexedSessions,
   generationDrafts,
-  onReplaceIndex,
-  onGenerateCodexReview,
-  onSaveGenerationDraft,
+  reviewGenerationTask,
+  scanQuery,
+  scanTask,
+  lastCompletedScanKey,
+  onStartReviewGeneration,
+  onOpenReviewGeneration,
+  onScanQueryChange,
+  onStartScan,
+  onOpenScan,
+  onOpenSettings,
+  onResumeReviewGeneration,
+  onRestartReviewGeneration,
+  onDeleteReviewGeneration,
 }: {
   settings: AiSettings | null;
   reviews: CodexDailyReview[];
   indexedSessions: CodexSessionIndex[];
   generationDrafts: ConversationGenerationDraft[];
-  onReplaceIndex: (records: CodexSessionIndex[]) => Promise<void>;
-  onGenerateCodexReview: (
-    input: CodexReviewInput,
-    onProgress?: (progress: CodexReviewProgress) => void,
-    signal?: AbortSignal,
-  ) => Promise<GenerateCodexReviewResult>;
-  onSaveGenerationDraft: (
-    draft: Omit<ConversationGenerationDraft, "id" | "createdAt" | "updatedAt">,
-  ) => Promise<void>;
+  reviewGenerationTask: ReviewGenerationRuntime | null;
+  scanQuery: ConversationScanQuery;
+  scanTask: ConversationScanRuntime | null;
+  lastCompletedScanKey: string;
+  onStartReviewGeneration: (request: ConversationReviewGenerationRequest) => Promise<void>;
+  onOpenReviewGeneration: () => void;
+  onScanQueryChange: (query: ConversationScanQuery) => void;
+  onStartScan: (query: ConversationScanQuery) => Promise<void>;
+  onOpenScan: () => void;
+  onOpenSettings: () => void;
+  onResumeReviewGeneration: (draftId: string) => Promise<void>;
+  onRestartReviewGeneration: (draftId: string) => Promise<void>;
+  onDeleteReviewGeneration: (draftId: string) => Promise<void>;
 }) {
-  const [sourceFilter, setSourceFilter] = useState<"all" | ConversationSourceKind>("all");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [cwdQuery, setCwdQuery] = useState("");
-  const [keyword, setKeyword] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [scanning, setScanning] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [message, setMessage] = useState("");
-  const [progress, setProgress] = useState<CodexReviewProgress | null>(null);
-  const [partialContent, setPartialContent] = useState("");
+  const [validationMessage, setValidationMessage] = useState("");
   const [sessionOverlayOpen, setSessionOverlayOpen] = useState(false);
   const [previewingId, setPreviewingId] = useState("");
   const [previewText, setPreviewText] = useState("");
   const [previewMeta, setPreviewMeta] = useState("");
   const [previewMessage, setPreviewMessage] = useState("");
   const [previewSessionId, setPreviewSessionId] = useState("");
-  const [pendingGenerateKey, setPendingGenerateKey] = useState("");
-  const [lastScanKey, setLastScanKey] = useState("");
-  const abortRef = useRef<AbortController | null>(null);
-  const jobIdRef = useRef("");
+  const [generationConfirmation, setGenerationConfirmation] = useState<{
+    fingerprint: string;
+    selectedCount: number;
+    selectedBytes: number;
+    sourceLabel: string;
+    highRisk: boolean;
+  } | null>(null);
+  const [startDateOpenRequestKey, setStartDateOpenRequestKey] = useState(0);
   const previewRequestSeqRef = useRef(0);
-  const partialContentRef = useRef("");
-  const progressRef = useRef<CodexReviewProgress | null>(null);
+  const handledScanJobIdRef = useRef("");
   const desktop = isDesktopRuntime();
   const todayKey = toDateKey(new Date());
+  const { sourceFilter, dateFrom, dateTo, cwdQuery, keyword } = scanQuery;
   const aiReady = settings ? getEffectiveAiSettings(settings).keySource !== "missing" : false;
 
   const reviewBySessionId = useMemo(() => {
@@ -802,58 +1053,82 @@ function CodexReviewWorkbench({
   );
   const selectedBytes = selectedSessions.reduce((sum, session) => sum + session.sizeBytes, 0);
   const selectedSources = Array.from(new Set(selectedSessions.map((session) => session.sourceKind)));
-  const latestCancelledDraft = [...generationDrafts]
-    .filter((draft) => draft.status === "cancelled")
-    .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt))[0];
-  const scanSourceKinds: ConversationSourceKind[] = sourceFilter === "all" ? ["codex", "claude"] : [sourceFilter];
-  const currentScanKey = JSON.stringify({
-    sourceFilter,
-    dateFrom: dateFrom.trim(),
-    dateTo: dateTo.trim(),
-    cwdQuery: cwdQuery.trim(),
-    keyword: keyword.trim(),
+  const selectedSource = selectedSources[0];
+  const resultSources = Array.from(new Set(indexedSessions.map((session) => session.sourceKind)));
+  const hasMixedResultSources = resultSources.length > 1;
+  const generationFingerprint = createConversationReviewFingerprint({
+    selectedIds,
+    selectedCount: selectedIds.size,
+    selectedBytes,
+    dateFrom,
+    dateTo,
   });
-  const scanFiltersChanged = indexedSessions.length > 0 && lastScanKey !== currentScanKey;
+  const latestInterruptedDraft = [...generationDrafts]
+    .filter((draft) => draft.checkpoint && (draft.status === "cancelled" || draft.status === "failed" || draft.status === "paused"))
+    .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt))[0];
+  const currentScanKey = createConversationScanKey(scanQuery);
+  const scanIsCurrent = Boolean(lastCompletedScanKey) && lastCompletedScanKey === currentScanKey;
+  const scanFiltersChanged = indexedSessions.length > 0 && !scanIsCurrent;
+  const scanActive = isConversationScanActive(scanTask);
 
-  const scan = async () => {
-    const scanKey = currentScanKey;
-    setScanning(true);
-    setMessage("");
-    setPendingGenerateKey("");
-    setProgress(null);
-    try {
-      const result = await indexConversationSessions({
-        sourceKinds: scanSourceKinds,
-        dateFrom,
-        dateTo,
-        cwdQuery,
-        keyword,
-        limit: 800,
-      });
-      await onReplaceIndex(result);
-      setLastScanKey(scanKey);
-      setSelectedIds(new Set());
-      setMessage(result.length > 0 ? `找到 ${result.length} 个会话。扫描只读取文件元信息，请手动勾选要生成回顾的会话。` : "没有找到符合条件的会话。");
-    } catch (error) {
-      setMessage(getSafeErrorMessage(error, "扫描 Codex 会话失败。"));
-    } finally {
-      setScanning(false);
-    }
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setGenerationConfirmation(null);
+    setValidationMessage("");
+  }, [lastCompletedScanKey]);
+
+  useEffect(() => {
+    if (scanTask?.status !== "completed" || handledScanJobIdRef.current === scanTask.jobId) return;
+    handledScanJobIdRef.current = scanTask.jobId;
+    setSelectedIds(new Set());
+    setGenerationConfirmation(null);
+    setValidationMessage("");
+  }, [scanTask]);
+
+  useEffect(() => {
+    if (!generationConfirmation || generationConfirmation.fingerprint === generationFingerprint) return;
+    setGenerationConfirmation(null);
+    setValidationMessage("选择或筛选条件已变化，请重新确认生成。");
+  }, [generationConfirmation, generationFingerprint]);
+
+  const updateScanQuery = (patch: Partial<ConversationScanQuery>) => {
+    onScanQueryChange({ ...scanQuery, ...patch });
+    setGenerationConfirmation(null);
+    setValidationMessage("");
+  };
+
+  const scan = () => {
+    setGenerationConfirmation(null);
+    setValidationMessage("");
+    void onStartScan(scanQuery);
   };
 
   const filterToday = () => {
-    setDateFrom(todayKey);
-    setDateTo(todayKey);
-    setPendingGenerateKey("");
-    setMessage("已筛选今天，请点击扫描会话。");
+    updateScanQuery({ dateFrom: todayKey, dateTo: todayKey });
+    setValidationMessage("已筛选今天，请扫描会话。");
+  };
+
+  const updateDateFrom = (value: string) => {
+    updateScanQuery({ dateFrom: value });
+  };
+
+  const updateDateTo = (value: string) => {
+    updateScanQuery({ dateTo: value });
   };
 
   const toggleSession = (id: string) => {
     if (scanFiltersChanged) {
-      setMessage("筛选条件已经改变，请先重新扫描会话。");
+      setValidationMessage("筛选条件已经改变，请先重新扫描会话。");
       return;
     }
-    setPendingGenerateKey("");
+    const session = indexedSessions.find((item) => item.id === id);
+    if (!session) return;
+    if (!selectedIds.has(id) && isConversationSourceLocked(selectedSource, session.sourceKind)) {
+      setValidationMessage(`本次已选择 ${getSourceLabel(selectedSource)} 会话。请先取消当前选择，再切换来源。`);
+      return;
+    }
+    setGenerationConfirmation(null);
+    setValidationMessage("");
     setSelectedIds((current) => {
       const next = new Set(current);
       if (next.has(id)) {
@@ -867,13 +1142,22 @@ function CodexReviewWorkbench({
 
   const toggleVisible = () => {
     if (scanFiltersChanged) {
-      setMessage("筛选条件已经改变，请先重新扫描会话。");
+      setValidationMessage("筛选条件已经改变，请先重新扫描会话。");
       return;
     }
-    setPendingGenerateKey("");
+    if (!selectedSource && hasMixedResultSources) {
+      setValidationMessage("请先勾选一个会话确定来源，再全选同来源会话。");
+      return;
+    }
+    const targetSource = selectedSource ?? resultSources[0];
+    const eligibleSessions = targetSource
+      ? indexedSessions.filter((session) => session.sourceKind === targetSource)
+      : indexedSessions;
+    setGenerationConfirmation(null);
+    setValidationMessage("");
     setSelectedIds((current) => {
-      const allSelected = indexedSessions.length > 0 && indexedSessions.every((session) => current.has(session.id));
-      return allSelected ? new Set() : new Set(indexedSessions.map((session) => session.id));
+      const allSelected = eligibleSessions.length > 0 && eligibleSessions.every((session) => current.has(session.id));
+      return allSelected ? new Set() : new Set(eligibleSessions.map((session) => session.id));
     });
   };
 
@@ -894,7 +1178,7 @@ function CodexReviewWorkbench({
       if (previewRequestSeqRef.current !== requestSeq) return;
       setPreviewText(input.transcriptChunks.join("\n\n"));
       setPreviewMeta(
-        `${session.sourceLabel} · ${session.date} · ${input.totalChars.toLocaleString("zh-CN")} 字符${
+        `${session.sourceLabel} · 最后活动 ${session.lastActiveDate ?? session.date} · ${input.totalChars.toLocaleString("zh-CN")} 字符${
           input.redacted ? " · 已脱敏" : ""
         }${input.truncated ? " · 已截断" : ""}`,
       );
@@ -917,115 +1201,104 @@ function CodexReviewWorkbench({
     }
   };
 
-  const generate = async () => {
-    if (!desktop) {
-      setMessage("Codex 回顾需要在桌面端使用。");
-      return;
-    }
-    if (!aiReady) {
-      setMessage("还没有配置 AI API Key。当前不会读取或上传对话正文。");
-      return;
-    }
-    if (selectedIds.size === 0) {
-      setMessage("请先勾选要回顾的会话。");
-      return;
-    }
-    if (scanFiltersChanged) {
-      setMessage("筛选条件已经改变，请先重新扫描会话。");
-      return;
-    }
-    if (selectedSources.length > 1) {
-      setMessage("请先只勾选一个来源生成来源回顾；Codex 和 Claude Code 都生成后，再合成今日总回顾。");
-      return;
-    }
-
-    const generateKey = Array.from(selectedIds).sort().join("|");
-    if (pendingGenerateKey !== generateKey) {
-      setPendingGenerateKey(generateKey);
-      const sourceLabel = selectedSessions[0]?.sourceLabel || getSourceLabel(selectedSessions[0]?.sourceKind ?? "codex");
-      setMessage(`将读取 ${selectedIds.size} 个 ${sourceLabel} 会话正文（约 ${formatBytes(selectedBytes)}）并调用 AI 生成回顾；随后会再调用一次 AI，结合本次回顾和长期记忆文档生成待审核记忆建议。未勾选会话不会读取。请再次点击“生成所选回顾”确认。`);
-      return;
-    }
-
-    const controller = new AbortController();
-    const jobId = createClientJobId();
-    abortRef.current = controller;
-    jobIdRef.current = jobId;
-    setGenerating(true);
-    setPendingGenerateKey("");
-    setMessage("");
-    setPartialContent("");
-    partialContentRef.current = "";
-    progressRef.current = {
-      stage: "读取会话",
-      message: `将读取 ${selectedIds.size} 个已勾选会话，未勾选的不会读取正文。`,
-    };
-    setProgress({
-      stage: "读取会话",
-      message: `将读取 ${selectedIds.size} 个已勾选会话，未勾选的不会读取正文。`,
-    });
-
+  const startGeneration = async () => {
+    setGenerationConfirmation(null);
+    const sourceKind = selectedSources[0];
+    const generationDate = dateFrom === dateTo && dateFrom
+      ? dateFrom
+      : dateTo || dateFrom || selectedSessions[0]?.lastActiveDate || selectedSessions[0]?.date || todayKey;
     try {
-      const input = await readSelectedConversationSessions(Array.from(selectedIds), jobId);
-      if (controller.signal.aborted) throw new DOMException("已取消生成。", "AbortError");
-      const result = await onGenerateCodexReview(
-        input,
-        (nextProgress) => {
-          progressRef.current = nextProgress;
-          setProgress(nextProgress);
-          if (nextProgress.partialContent) {
-            partialContentRef.current = nextProgress.partialContent;
-            setPartialContent(nextProgress.partialContent);
-          }
-        },
-        controller.signal,
-      );
-      setMessage(
-        result.replacementDraft
-          ? `已生成“${result.review.title}”的新版本，并保存为替换草稿；原回顾没有被覆盖。`
-          : result.patchDraft
-          ? `已生成“${result.review.title}”，并写下 1 条待审核的记忆修改建议。`
-          : `已生成“${result.review.title}”。记忆修改建议未生成，可稍后重新生成。`,
-      );
+      await onStartReviewGeneration({
+        reviewKey: `${generationDate}:source:${sourceKind}`,
+        date: generationDate,
+        reviewKind: "source",
+        sourceKind,
+        sourceLabel: getSourceLabel(sourceKind),
+        selectedSessionIds: Array.from(selectedIds),
+        activityDateFrom: dateFrom || undefined,
+        activityDateTo: dateTo || undefined,
+      });
+      setValidationMessage("");
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        const savedPartialContent = partialContentRef.current;
-        if (savedPartialContent.trim()) {
-          await onSaveGenerationDraft({
-            reviewKey: createReviewKeyFromSelection(selectedSessions),
-            date: selectedSessions[0]?.date,
-            reviewKind: "source",
-            sourceKind: selectedSources.length === 1 ? selectedSources[0] : undefined,
-            sourceLabel: selectedSources.length === 1 ? getSourceLabel(selectedSources[0]) : "AI 对话",
-            title: "未完成的回顾草稿",
-            partialContent: savedPartialContent,
-            selectedSessionIds: Array.from(selectedIds),
-            stage: progressRef.current?.stage ?? "合成每日回顾",
-            message: "用户取消后保留的临时草稿。",
-            status: "cancelled",
-          });
-        }
-        setMessage(savedPartialContent.trim() ? "已取消本次生成，临时草稿已保留。" : "已取消本次生成。");
-      } else {
-        setMessage(getSafeErrorMessage(error, "生成 Codex 回顾失败。"));
-      }
-    } finally {
-      setGenerating(false);
-      abortRef.current = null;
-      jobIdRef.current = "";
+      setValidationMessage(getSafeErrorMessage(error, "无法开始回顾生成任务。"));
     }
   };
 
-  const cancel = () => {
-    abortRef.current?.abort();
-    if (jobIdRef.current) {
-      void cancelConversationReviewJob(jobIdRef.current);
+  const generate = () => {
+    if (!desktop) {
+      setValidationMessage("AI 对话回顾需要在桌面端使用。");
+      return;
     }
-    setProgress((current) => ({
-      stage: current?.stage ?? "合成每日回顾",
-      message: "正在取消，请稍候。",
-      partialContent: current?.partialContent,
-    }));
+    if (scanActive) {
+      onOpenScan();
+      return;
+    }
+    if (taskRunning) {
+      onOpenReviewGeneration();
+      return;
+    }
+    if (!aiReady) {
+      onOpenSettings();
+      return;
+    }
+    if (selectedIds.size === 0) {
+      setValidationMessage("请先勾选要回顾的会话。");
+      return;
+    }
+    if (!scanIsCurrent) {
+      setValidationMessage("筛选条件尚未扫描或已经改变，请先扫描会话。");
+      return;
+    }
+    if (selectedSources.length > 1) {
+      setValidationMessage("一次只能为一个来源生成回顾。");
+      return;
+    }
+
+    const highRisk = shouldWarnLargeNoDateReview({
+      selectedCount: selectedIds.size,
+      selectedBytes,
+      dateFrom,
+      dateTo,
+    });
+    setValidationMessage("");
+    setGenerationConfirmation({
+      fingerprint: generationFingerprint,
+      selectedCount: selectedIds.size,
+      selectedBytes,
+      sourceLabel: selectedSessions[0]?.sourceLabel || getSourceLabel(selectedSessions[0]?.sourceKind ?? "codex"),
+      highRisk,
+    });
+  };
+
+  const taskRunning = reviewGenerationTask?.status === "running";
+  const eligibleSelectedSessions = selectedSource
+    ? indexedSessions.filter((session) => session.sourceKind === selectedSource)
+    : indexedSessions;
+  const allEligibleSelected = eligibleSelectedSessions.length > 0
+    && eligibleSelectedSessions.every((session) => selectedIds.has(session.id));
+  const selectAllDisabled = scanActive || scanFiltersChanged || (!selectedSource && hasMixedResultSources);
+  const primaryActionState = resolveConversationReviewPrimaryAction({
+    desktop,
+    reviewRunning: taskRunning,
+    scanActive,
+    scanCancelling: scanTask?.status === "cancelling",
+    scanIsCurrent,
+    hasSavedSessions: indexedSessions.length > 0,
+    selectedCount: selectedIds.size,
+    aiReady,
+  });
+  const primaryAction = {
+    ...primaryActionState,
+    icon: primaryActionState.id === "scan" || primaryActionState.id === "open-scan-progress"
+      ? "scan" as const
+      : primaryActionState.id === "configure-ai" ? "settings" as const : "review" as const,
+    run: primaryActionState.id === "open-review-progress"
+      ? onOpenReviewGeneration
+      : primaryActionState.id === "open-scan-progress"
+        ? onOpenScan
+        : primaryActionState.id === "scan"
+          ? scan
+          : primaryActionState.id === "configure-ai" ? onOpenSettings : generate,
   };
 
   return (
@@ -1034,7 +1307,7 @@ function CodexReviewWorkbench({
         <div>
           <h3 className="text-lg font-semibold text-ink">AI 对话回顾台</h3>
           <p className="mt-0.5 max-w-3xl truncate text-xs text-ink/45">
-            手动触发 · 扫描只读元信息 · 点击单条会话才本地预览正文 · 生成时只读取已勾选会话。
+            扫描会在本地核对消息时间戳和类型，不保存正文，也不会调用 AI；确认生成后才会读取、脱敏并分段发送正文。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1046,23 +1319,16 @@ function CodexReviewWorkbench({
             <Maximize2 size={13} />
             放大会话
           </button>
-          {generating && (
+          {scanIsCurrent && !taskRunning && !scanActive && (
             <button
-              className="danger-action action-compact"
-              onClick={cancel}
+              className="soft-button action-compact"
+              disabled={!desktop}
+              onClick={scan}
             >
-              <X size={13} />
-              取消
+              <RefreshCw size={13} />
+              重新扫描
             </button>
           )}
-          <button
-            className="secondary-action action-compact"
-            disabled={!desktop || scanning}
-            onClick={scan}
-          >
-            {scanning ? <RefreshCw size={13} className="animate-spin" /> : <Search size={13} />}
-            {scanning ? "扫描中" : "扫描会话"}
-          </button>
         </div>
       </div>
 
@@ -1072,10 +1338,17 @@ function CodexReviewWorkbench({
         </div>
       )}
 
-      {latestCancelledDraft && (
-        <div className="mb-2 shrink-0 rounded-[8px] border border-line bg-surface px-3 py-2 text-xs leading-5 text-ink/60">
-          <div className="mb-1 font-semibold text-ink/80">有一份取消后保留的临时草稿</div>
-          <p className="line-clamp-3 whitespace-pre-wrap text-anywhere">{latestCancelledDraft.partialContent}</p>
+      {!taskRunning && latestInterruptedDraft && (
+        <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-[8px] border border-line bg-surface px-3 py-2 text-xs leading-5 text-ink/60">
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-ink/80">有一项未完成的回顾生成任务</div>
+            <p className="truncate">{latestInterruptedDraft.message || "已保存检查点，可继续生成。"}</p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <button className="primary-button action-compact" onClick={() => void onResumeReviewGeneration(latestInterruptedDraft.id)}>继续生成</button>
+            <button className="secondary-action action-compact" onClick={() => void onRestartReviewGeneration(latestInterruptedDraft.id)}>重新开始</button>
+            <button className="ghost-action action-compact" onClick={() => void onDeleteReviewGeneration(latestInterruptedDraft.id)}>删除任务</button>
+          </div>
         </div>
       )}
 
@@ -1089,28 +1362,32 @@ function CodexReviewWorkbench({
               { value: "codex", label: "Codex" },
               { value: "claude", label: "Claude Code" },
             ]}
-            onChange={(value) => setSourceFilter(value as "all" | ConversationSourceKind)}
+            onChange={(value) => updateScanQuery({ sourceFilter: value as "all" | ConversationSourceKind })}
             triggerClassName="field-standard px-2.5 text-xs"
+            disabled={scanActive}
           />
         </label>
         <label className="space-y-0.5 text-[11px] text-ink/50">
-          起始日期
+          活动起日
           <DatePickerPopover
             value={dateFrom}
-            onChange={setDateFrom}
-            onClear={() => setDateFrom("")}
-            placeholder="起始日期"
-            buttonLabel="选择起始日期"
+            onChange={updateDateFrom}
+            onClear={() => updateDateFrom("")}
+            placeholder="活动起日"
+            buttonLabel="选择活动起日"
+            openRequestKey={startDateOpenRequestKey}
+            disabled={scanActive}
           />
         </label>
         <label className="space-y-0.5 text-[11px] text-ink/50">
-          结束日期
+          活动止日
           <DatePickerPopover
             value={dateTo}
-            onChange={setDateTo}
-            onClear={() => setDateTo("")}
-            placeholder="结束日期"
-            buttonLabel="选择结束日期"
+            onChange={updateDateTo}
+            onClear={() => updateDateTo("")}
+            placeholder="活动止日"
+            buttonLabel="选择活动止日"
+            disabled={scanActive}
           />
         </label>
         <label className="space-y-0.5 text-[11px] text-ink/50">
@@ -1119,17 +1396,18 @@ function CodexReviewWorkbench({
             type="button"
             className={`soft-button action-standard w-full text-xs ${dateFrom === todayKey && dateTo === todayKey ? "active-toggle" : ""}`}
             onClick={filterToday}
+            disabled={scanActive}
           >
             今日
           </button>
         </label>
         <label className="space-y-0.5 text-[11px] text-ink/50">
           路径筛选
-          <input value={cwdQuery} onChange={(event) => setCwdQuery(event.target.value)} className="field-control field-standard w-full px-2 text-xs" placeholder="例如 个人知识库" />
+          <input value={cwdQuery} onChange={(event) => updateScanQuery({ cwdQuery: event.target.value })} className="field-control field-standard w-full px-2 text-xs" placeholder="例如 个人知识库" disabled={scanActive} />
         </label>
         <label className="space-y-0.5 text-[11px] text-ink/50">
           关键词
-          <input value={keyword} onChange={(event) => setKeyword(event.target.value)} className="field-control field-standard w-full px-2 text-xs" placeholder="标题、意图、路径" />
+          <input value={keyword} onChange={(event) => updateScanQuery({ keyword: event.target.value })} className="field-control field-standard w-full px-2 text-xs" placeholder="标题、意图、路径" disabled={scanActive} />
         </label>
       </div>
 
@@ -1138,16 +1416,27 @@ function CodexReviewWorkbench({
           已选 {selectedIds.size} 个会话 · {formatBytes(selectedBytes)} · 生成时才读取正文
         </div>
         <div className="flex gap-2">
-          <button className="soft-button action-compact disabled:cursor-not-allowed disabled:opacity-50" disabled={scanFiltersChanged} onClick={toggleVisible}>
-            {indexedSessions.length > 0 && indexedSessions.every((session) => selectedIds.has(session.id)) ? "取消全选" : "全选当前"}
+          <button
+            className="soft-button action-compact disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={selectAllDisabled}
+            onClick={toggleVisible}
+            title={scanActive ? "扫描进行中" : selectAllDisabled && hasMixedResultSources ? "请先勾选一个会话确定来源" : undefined}
+          >
+            {allEligibleSelected ? "取消全选" : selectedSource ? "全选同来源" : "全选当前"}
           </button>
           <button
             className="primary-button action-compact disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={!desktop || generating || selectedIds.size === 0 || scanFiltersChanged}
-            onClick={generate}
+            disabled={primaryAction.disabled}
+            onClick={primaryAction.run}
           >
-            {generating ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={14} />}
-            {generating ? "生成中" : "生成所选回顾"}
+            {primaryAction.icon === "scan"
+              ? <Search size={14} />
+              : primaryAction.icon === "settings"
+                ? <Settings2 size={14} />
+                : taskRunning
+                  ? <RefreshCw size={14} className="animate-spin" />
+                  : <Sparkles size={14} />}
+            {primaryAction.label}
           </button>
         </div>
       </div>
@@ -1162,6 +1451,8 @@ function CodexReviewWorkbench({
             {indexedSessions.map((session) => {
               const selected = selectedIds.has(session.id);
               const activePreview = previewSessionId === session.id;
+              const sourceLocked = isConversationSourceLocked(selectedSource, session.sourceKind);
+              const selectionDisabled = scanActive || scanFiltersChanged || sourceLocked;
               return (
                 <article
                   key={`${session.id}-${session.path}`}
@@ -1171,9 +1462,10 @@ function CodexReviewWorkbench({
                 >
                   <button
                     type="button"
-                    className="mt-0.5 text-moss"
+                    className="mt-0.5 text-moss disabled:cursor-not-allowed disabled:text-ink/20"
                     aria-pressed={selected}
-                    title={selected ? "取消勾选" : "勾选生成"}
+                    disabled={selectionDisabled}
+                    title={sourceLocked ? `本次已选择 ${getSourceLabel(selectedSource)} 来源` : selected ? "取消勾选" : "勾选生成"}
                     onClick={(event) => {
                       event.stopPropagation();
                       toggleSession(session.id);
@@ -1197,7 +1489,10 @@ function CodexReviewWorkbench({
                     <span className="mt-1 line-clamp-3 text-xs leading-5 text-ink/54">{session.preview || "扫描阶段只读取元信息；点击后可在右侧只读预览正文。"}</span>
                   </button>
                   <span className="text-right text-[11px] leading-5 text-ink/42">
-                    <span className="block text-ink/58">{session.date}</span>
+                    <span className="block text-ink/58">最后活动 {session.lastActiveDate ?? session.date}</span>
+                    {(session.startedDate ?? session.date) !== (session.lastActiveDate ?? session.date) && (
+                      <span className="block">开始于 {session.startedDate ?? session.date}</span>
+                    )}
                     <span className="block">{formatBytes(session.sizeBytes)}</span>
                     {previewingId === session.id && <span className="block text-copper">读取中</span>}
                   </span>
@@ -1226,21 +1521,24 @@ function CodexReviewWorkbench({
         </div>
       )}
 
-      {(progress || partialContent || message) && (
-        <div className="mt-2 max-h-[168px] shrink-0 overflow-y-auto rounded-[8px] border border-line bg-panel px-3 py-2 text-sm leading-6 text-ink/62 scrollbar-thin">
-          {progress && (
-            <div className="mb-2 flex items-center gap-2 text-xs font-medium text-ink">
-              {generating && <RefreshCw size={14} className="animate-spin text-moss" />}
-              <span>{progress.stage}</span>
-              <span className="font-normal text-ink/45">{progress.message}</span>
-            </div>
-          )}
-          {partialContent && (
-            <pre className="conversation-code-surface max-h-[220px] overflow-y-auto whitespace-pre-wrap rounded-[8px] bg-surface px-3 py-2 text-anywhere text-xs leading-6 text-ink/62 scrollbar-thin">
-              {partialContent}
-            </pre>
-          )}
-          {message && <p className="mt-1 text-xs text-ink/48">{message}</p>}
+      {(reviewGenerationTask || scanTask || validationMessage) && (
+        <div className="mt-2 shrink-0 rounded-[8px] border border-line bg-panel px-3 py-2 text-sm leading-6 text-ink/62" aria-live="polite">
+          <div className="min-w-0">
+            {reviewGenerationTask && (
+              <div className="flex items-center gap-2 text-xs font-medium text-ink">
+                {taskRunning && <RefreshCw size={14} className="animate-spin text-moss" />}
+                <span>{reviewGenerationTask.progress?.stage ?? "回顾生成"}</span>
+                <span className="truncate font-normal text-ink/45">{reviewGenerationTask.message}</span>
+              </div>
+            )}
+            {scanTask && (
+              <div className={`${reviewGenerationTask ? "mt-1" : ""} flex items-center gap-2 text-xs text-ink/48`}>
+                {scanActive && <RefreshCw size={13} className="animate-spin text-moss" />}
+                <span>{scanTask.message}</span>
+              </div>
+            )}
+            {validationMessage && <p className="mt-1 text-xs font-medium text-copper">{validationMessage}</p>}
+          </div>
         </div>
       )}
 
@@ -1248,10 +1546,67 @@ function CodexReviewWorkbench({
         <ConversationSessionPreviewOverlay
           sessions={indexedSessions}
           selectedIds={selectedIds}
+          lockedSourceKind={selectedSource}
+          selectionDisabled={scanActive || scanFiltersChanged}
           onToggleSession={toggleSession}
           onClose={() => setSessionOverlayOpen(false)}
         />
       )}
+      <ConfirmDialog
+        open={Boolean(generationConfirmation)}
+        title={generationConfirmation?.highRisk ? "确认按当前范围生成" : "确认生成回顾"}
+        message={generationConfirmation
+          ? (
+              <div className="space-y-3">
+                <section>
+                  <div className="text-xs font-semibold text-ink/72">当前选择</div>
+                  <div className="mt-1.5 grid gap-1 text-xs leading-5 text-ink/58">
+                    <span>{generationConfirmation.sourceLabel}</span>
+                    <span>{generationConfirmation.selectedCount} 个会话，原始文件约 {formatBytes(generationConfirmation.selectedBytes)}</span>
+                    <span>{dateFrom || dateTo ? `${dateFrom || "最早"} 至 ${dateTo || "现在"}` : "未限定活动日期"}</span>
+                  </div>
+                </section>
+
+                {generationConfirmation.highRisk && (
+                  <section className="border-t border-line/70 pt-3">
+                    <div className="text-xs font-semibold text-copper">当前范围较大</div>
+                    <p className="mt-1.5 text-xs leading-5 text-ink/52">
+                      {!dateFrom && !dateTo
+                        ? "未设置活动日期可能延长处理时间。受本地读取上限影响，结果也可能无法覆盖全部内容。"
+                        : "所选会话文件体积较大，处理时间可能更长。受本地读取上限影响，结果也可能无法覆盖全部内容。"}
+                    </p>
+                  </section>
+                )}
+
+                <section className="border-t border-line/70 pt-3">
+                  <div className="text-xs font-semibold text-ink/72">数据如何处理</div>
+                  <p className="mt-1.5 text-xs leading-5 text-ink/52">
+                    Daymark 会在本地读取和脱敏所选会话，只把整理后的分段文本发送给当前 AI 服务。未选择的会话不会读取。
+                  </p>
+                </section>
+              </div>
+            )
+          : ""}
+        confirmLabel={generationConfirmation?.highRisk ? "仍然生成" : "确认生成"}
+        secondaryLabel={generationConfirmation?.highRisk ? "选择日期" : undefined}
+        cancelLabel="取消"
+        showCloseButton={false}
+        onCancel={() => setGenerationConfirmation(null)}
+        onConfirm={async () => {
+          if (!generationConfirmation) return;
+          if (generationConfirmation.fingerprint !== generationFingerprint) {
+            setGenerationConfirmation(null);
+            setValidationMessage("选择或筛选条件已变化，请重新确认生成。");
+            return;
+          }
+          await startGeneration();
+        }}
+        onSecondary={async () => {
+          setGenerationConfirmation(null);
+          setValidationMessage("请设置活动日期并重新扫描会话。");
+          setStartDateOpenRequestKey((current) => current + 1);
+        }}
+      />
     </section>
   );
 }
@@ -1261,12 +1616,15 @@ function ReviewArchivePanel({
   codexReviews,
   rollingWorkReviews,
   dailyReviewDrafts,
+  memoryPatchDrafts,
   targetReviewId,
   targetReviewDraftId,
   targetSummaryId,
   onOpenCodexReview,
   onOpenSummaryReport,
   onGenerateCombinedReview,
+  onUpdateDailyReviewDraft,
+  onGenerateMemorySuggestion,
   onApplyDailyReviewDraft,
   onIgnoreDailyReviewDraft,
   onArchiveRollingWorkReview,
@@ -1275,6 +1633,7 @@ function ReviewArchivePanel({
   codexReviews: CodexDailyReview[];
   rollingWorkReviews: RollingWorkReview[];
   dailyReviewDrafts: DailyReviewReplacementDraft[];
+  memoryPatchDrafts: MemoryPatchDraft[];
   targetReviewId?: string;
   targetReviewDraftId?: string;
   targetSummaryId?: string;
@@ -1285,6 +1644,15 @@ function ReviewArchivePanel({
     onProgress?: (progress: CodexReviewProgress) => void,
     signal?: AbortSignal,
   ) => Promise<GenerateCodexReviewResult>;
+  onUpdateDailyReviewDraft: (
+    id: string,
+    patch: Partial<DailyReviewReplacementDraft>,
+  ) => Promise<DailyReviewReplacementDraft>;
+  onGenerateMemorySuggestion: (
+    source: ReviewMemorySuggestionSource,
+    onProgress?: (progress: CodexReviewProgress) => void,
+    signal?: AbortSignal,
+  ) => Promise<MemorySuggestionGenerationResult>;
   onApplyDailyReviewDraft: (id: string) => Promise<void>;
   onIgnoreDailyReviewDraft: (id: string) => Promise<void>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
@@ -1296,9 +1664,9 @@ function ReviewArchivePanel({
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [dateSearchOpen, setDateSearchOpen] = useState(false);
-  const [expandedDraftId, setExpandedDraftId] = useState("");
   const [draftAction, setDraftAction] = useState<{ id: string; kind: "apply" | "ignore" } | null>(null);
-  const [pendingDraftApplyId, setPendingDraftApplyId] = useState("");
+  const [selectedDraft, setSelectedDraft] = useState<DailyReviewReplacementDraft | null>(null);
+  const [pendingDraftAction, setPendingDraftAction] = useState<{ draft: DailyReviewReplacementDraft; kind: "apply" | "ignore" } | null>(null);
   const [activeRollingReview, setActiveRollingReview] = useState<RollingWorkReview | null>(null);
   const [rollingArchiveDate, setRollingArchiveDate] = useState("");
 
@@ -1405,7 +1773,7 @@ function ReviewArchivePanel({
 
     if (pendingCombineDate !== date) {
       setPendingCombineDate(date);
-      setMessage(`将读取 ${date} 的 ${reviews.length} 份来源回顾并调用 AI 合成总回顾，可能生成待审核的记忆建议。再次点击“确认合成”才会开始。`);
+      setMessage(`将读取 ${date} 的 ${reviews.length} 份来源回顾并调用 AI 合并为今日回顾。确认生成后才会开始。`);
       return;
     }
     setCombiningDate(date);
@@ -1413,13 +1781,7 @@ function ReviewArchivePanel({
     setMessage("");
     try {
       const result = await onGenerateCombinedReview(reviews);
-      setMessage(
-        result.replacementDraft
-          ? `已合成“${result.review.title}”的新版本，并保存为替换草稿；原综合回顾没有被覆盖。`
-          : result.patchDraft
-          ? `已合成“${result.review.title}”，并写下 1 条待审核的记忆修改建议。`
-          : `已合成“${result.review.title}”。记忆修改建议未生成，可稍后重新生成。`,
-      );
+      setMessage(formatReviewGenerationResult(result));
     } catch (error) {
       setMessage(getSafeErrorMessage(error, "合成今日总回顾失败。"));
     } finally {
@@ -1429,21 +1791,16 @@ function ReviewArchivePanel({
 
   const applyDraft = async (draft: DailyReviewReplacementDraft) => {
     if (draftAction) return;
-    if (pendingDraftApplyId !== draft.id) {
-      setPendingDraftApplyId(draft.id);
-      setExpandedDraftId(draft.id);
-      setMessage("应用后会覆盖同日正式回顾。请先预览草稿内容，确认无误后再次点击“应用”。");
-      return;
-    }
     setDraftAction({ id: draft.id, kind: "apply" });
     setMessage("");
     try {
       await onApplyDailyReviewDraft(draft.id);
-      setMessage(`已应用“${draft.title}”，原回顾已被这份草稿替换。`);
-      setPendingDraftApplyId("");
+      setMessage(`已替换为“${draft.title}”。`);
+      setSelectedDraft(null);
     } catch (error) {
-      setMessage(getSafeErrorMessage(error, "应用替换草稿失败。"));
+      setMessage(getSafeErrorMessage(error, "替换当前回顾失败。"));
     } finally {
+      setPendingDraftAction(null);
       setDraftAction(null);
     }
   };
@@ -1451,14 +1808,15 @@ function ReviewArchivePanel({
   const ignoreDraft = async (draft: DailyReviewReplacementDraft) => {
     if (draftAction) return;
     setDraftAction({ id: draft.id, kind: "ignore" });
-    setPendingDraftApplyId("");
     setMessage("");
     try {
       await onIgnoreDailyReviewDraft(draft.id);
-      setMessage(`已忽略“${draft.title}”，现有回顾保持不变。`);
+      setMessage(`已舍弃“${draft.title}”，当前回顾保持不变。`);
+      setSelectedDraft(null);
     } catch (error) {
-      setMessage(getSafeErrorMessage(error, "忽略替换草稿失败。"));
+      setMessage(getSafeErrorMessage(error, "舍弃待确认更新失败。"));
     } finally {
+      setPendingDraftAction(null);
       setDraftAction(null);
     }
   };
@@ -1485,7 +1843,7 @@ function ReviewArchivePanel({
             <History size={16} />
             回顾档案
           </div>
-          <p className="mt-1 text-xs leading-5 text-ink/45">按来源与日期轻量筛选，细读时再打开大层。</p>
+          <p className="mt-1 text-xs leading-5 text-ink/45">按来源与日期筛选；需要时打开阅读页。</p>
         </div>
         <button className="soft-button action-compact" onClick={() => setDateSearchOpen((value) => !value)}>
           日期
@@ -1542,14 +1900,13 @@ function ReviewArchivePanel({
 
       {pendingReviewDrafts.length > 0 && (
         <ScrollableResultPanel
-          title="替换草稿"
-          count={`${pendingReviewDrafts.length} 份待处理`}
-          status="只在你确认后覆盖原回顾。"
+          title="待确认更新"
+          count={`${pendingReviewDrafts.length} 项待确认`}
+          status="确认后才会替换当前回顾。"
           maxHeightClass="max-h-[260px]"
           bodyClassName="space-y-2"
         >
           {pendingReviewDrafts.map((draft) => {
-            const expanded = expandedDraftId === draft.id;
             const applying = draftAction?.id === draft.id && draftAction.kind === "apply";
             const ignoring = draftAction?.id === draft.id && draftAction.kind === "ignore";
 
@@ -1565,30 +1922,26 @@ function ReviewArchivePanel({
                     <h3 className="line-clamp-2 text-anywhere text-sm font-semibold text-ink">{draft.title}</h3>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
-                    <button className="soft-button action-micro" onClick={() => setExpandedDraftId(expanded ? "" : draft.id)}>
-                      {expanded ? "收起" : "预览"}
+                    <button className="soft-button action-micro" onClick={() => setSelectedDraft(draft)}>
+                      查看
                     </button>
                     <button
                       className="soft-button action-micro"
                       disabled={Boolean(draftAction)}
-                      onClick={() => void ignoreDraft(draft)}
+                      onClick={() => setPendingDraftAction({ draft, kind: "ignore" })}
                     >
-                      {ignoring ? "忽略中" : "忽略"}
+                      {ignoring ? "舍弃中" : "舍弃"}
                     </button>
                     <button
                       className="primary-button action-micro"
                       disabled={Boolean(draftAction)}
-                      onClick={() => void applyDraft(draft)}
+                      onClick={() => setPendingDraftAction({ draft, kind: "apply" })}
                     >
-                      {applying ? "应用中" : pendingDraftApplyId === draft.id ? "再次应用" : "应用"}
+                      {applying ? "替换中" : "替换当前回顾"}
                     </button>
                   </div>
                 </div>
-                <BoundedPreview
-                  expanded={expanded}
-                  maxLinesClass="line-clamp-2"
-                  className="mt-2 text-sm leading-6 text-ink/58"
-                >
+                <BoundedPreview maxLinesClass="line-clamp-2" className="mt-2 text-sm leading-6 text-ink/58">
                   {draft.content}
                 </BoundedPreview>
               </ResultRow>
@@ -1603,9 +1956,7 @@ function ReviewArchivePanel({
             reviews.length >= 2 && !combinedKeys.has(date) ? (
               <div key={`combine-${date}`} className="rounded-[8px] border border-copper/25 bg-copper/10 p-3">
                 <div className="text-xs font-semibold text-copper">{date} 可合成今日总回顾</div>
-                <p className="mt-1 text-xs leading-5 text-ink/50">
-                  已有 {reviews.map((review) => review.sourceLabel).join("、")} 回顾，可由你手动合成一份总档案。
-                </p>
+                <p className="mt-1 text-xs leading-5 text-ink/50">已有 {reviews.map((review) => review.sourceLabel).join("、")} 回顾，可合并为一份今日回顾。</p>
                 <button
                   className="soft-button action-compact mt-2"
                   disabled={Boolean(combiningDate)}
@@ -1690,7 +2041,295 @@ function ReviewArchivePanel({
           onClose={() => setActiveRollingReview(null)}
         />
       )}
+      {selectedDraft && (
+        <ReviewReplacementDraftOverlay
+          draft={selectedDraft}
+          memoryPatchDraft={memoryPatchDrafts.find(
+            (patchDraft) => patchDraft.sourceReviewDraftId === selectedDraft.id,
+          )}
+          onSave={onUpdateDailyReviewDraft}
+          onSaved={setSelectedDraft}
+          onGenerateMemorySuggestion={onGenerateMemorySuggestion}
+          onRequestApply={(draft) => setPendingDraftAction({ draft, kind: "apply" })}
+          onRequestIgnore={(draft) => setPendingDraftAction({ draft, kind: "ignore" })}
+          onClose={() => setSelectedDraft(null)}
+        />
+      )}
+      <ConfirmDialog
+        open={Boolean(pendingDraftAction)}
+        title={pendingDraftAction?.kind === "apply" ? "替换当前回顾？" : "舍弃这份更新？"}
+        message={pendingDraftAction?.kind === "apply"
+          ? `确认后将用“${pendingDraftAction.draft.title}”替换 ${pendingDraftAction.draft.date} 的当前回顾。`
+          : "这份待确认更新将被删除，当前回顾保持不变。"}
+        confirmLabel={pendingDraftAction?.kind === "apply" ? "确认替换" : "舍弃更新"}
+        danger={pendingDraftAction?.kind === "ignore"}
+        onCancel={() => setPendingDraftAction(null)}
+        onConfirm={async () => {
+          if (!pendingDraftAction) return;
+          if (pendingDraftAction.kind === "apply") {
+            await applyDraft(pendingDraftAction.draft);
+            return;
+          }
+          await ignoreDraft(pendingDraftAction.draft);
+        }}
+      />
     </aside>
+  );
+}
+
+function ReviewReplacementDraftOverlay({
+  draft,
+  memoryPatchDraft,
+  onSave,
+  onSaved,
+  onGenerateMemorySuggestion,
+  onRequestApply,
+  onRequestIgnore,
+  onClose,
+}: {
+  draft: DailyReviewReplacementDraft;
+  memoryPatchDraft?: MemoryPatchDraft;
+  onSave: (
+    id: string,
+    patch: Partial<DailyReviewReplacementDraft>,
+  ) => Promise<DailyReviewReplacementDraft>;
+  onSaved: (draft: DailyReviewReplacementDraft) => void;
+  onGenerateMemorySuggestion: (
+    source: ReviewMemorySuggestionSource,
+    onProgress?: (progress: CodexReviewProgress) => void,
+    signal?: AbortSignal,
+  ) => Promise<MemorySuggestionGenerationResult>;
+  onRequestApply: (draft: DailyReviewReplacementDraft) => void;
+  onRequestIgnore: (draft: DailyReviewReplacementDraft) => void;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(draft.title);
+  const [content, setContent] = useState(draft.content);
+  const [savedTitle, setSavedTitle] = useState(draft.title);
+  const [savedContent, setSavedContent] = useState(draft.content);
+  const [saving, setSaving] = useState(false);
+  const [suggestionRunning, setSuggestionRunning] = useState(false);
+  const [message, setMessage] = useState("");
+  const saveTimerRef = useRef<number | null>(null);
+  const savePromiseRef = useRef<Promise<DailyReviewReplacementDraft | null> | null>(null);
+  const latestValuesRef = useRef({ title: draft.title, content: draft.content });
+  const savedValuesRef = useRef({ title: draft.title, content: draft.content });
+  const draftRef = useRef(draft);
+  const dirty = title !== savedTitle || content !== savedContent;
+  const suggestionContentVersion = memoryPatchDraft?.sourceReviewContentVersion
+    ?? draft.memorySuggestionCheckpoint?.sourceContentVersion;
+  const suggestionSourceOutdated = isMemorySuggestionSourceOutdated(
+    suggestionContentVersion,
+    title,
+    content,
+  );
+  const suggestionAlreadyResolved = draft.memorySuggestionStatus === "created"
+    || draft.memorySuggestionStatus === "none";
+  const canGenerateSuggestion = suggestionSourceOutdated
+    || (!memoryPatchDraft && !suggestionAlreadyResolved);
+
+  useEffect(() => {
+    setTitle(draft.title);
+    setContent(draft.content);
+    setSavedTitle(draft.title);
+    setSavedContent(draft.content);
+    setMessage("");
+    latestValuesRef.current = { title: draft.title, content: draft.content };
+    savedValuesRef.current = { title: draft.title, content: draft.content };
+    draftRef.current = draft;
+  }, [draft.id]);
+
+  useEffect(() => {
+    latestValuesRef.current = { title, content };
+  }, [content, title]);
+
+  const persistDraft = async () => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (savePromiseRef.current) {
+      await savePromiseRef.current;
+    }
+
+    const values = latestValuesRef.current;
+    const savedValues = savedValuesRef.current;
+    if (values.title === savedValues.title && values.content === savedValues.content) {
+      return { ...draftRef.current, ...values };
+    }
+
+    setSaving(true);
+    setMessage("正在保存修改。");
+    const request = onSave(draftRef.current.id, values)
+      .then((updated) => {
+        draftRef.current = updated;
+        savedValuesRef.current = { title: updated.title, content: updated.content };
+        setSavedTitle(updated.title);
+        setSavedContent(updated.content);
+        onSaved(updated);
+        setMessage("修改已自动保存。");
+        return updated;
+      })
+      .catch((error) => {
+        setMessage(getSafeErrorMessage(error, "自动保存失败，当前内容仍保留在编辑区。"));
+        return null;
+      });
+    savePromiseRef.current = request;
+    const result = await request;
+    if (savePromiseRef.current === request) {
+      savePromiseRef.current = null;
+      setSaving(false);
+    }
+    return result;
+  };
+
+  useEffect(() => {
+    if (!dirty || suggestionRunning) return undefined;
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      void persistDraft();
+    }, 500);
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [content, dirty, suggestionRunning, title]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+    };
+  }, []);
+
+  const flushThen = async (action: (savedDraft: DailyReviewReplacementDraft) => void) => {
+    if (suggestionRunning) {
+      setMessage("长期记忆建议正在生成，请稍候。");
+      return;
+    }
+    const savedDraft = await persistDraft();
+    if (savedDraft) action(savedDraft);
+  };
+
+  const generateSuggestion = async () => {
+    if (suggestionRunning) return;
+    const savedDraft = await persistDraft();
+    if (!savedDraft) return;
+    setSuggestionRunning(true);
+    setMessage("正在生成长期记忆建议。");
+    try {
+      const result = await onGenerateMemorySuggestion({ kind: "replacement", draft: savedDraft });
+      setMessage(formatMemorySuggestionResult(result));
+    } catch (error) {
+      setMessage(getSafeErrorMessage(error, "长期记忆建议未生成，可稍后重试。"));
+    } finally {
+      setSuggestionRunning(false);
+    }
+  };
+
+  const requestClose = () => {
+    void flushThen(() => onClose());
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") requestClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [suggestionRunning]);
+
+  return (
+    <div className="modal-backdrop">
+      <section
+        aria-label="编辑待确认更新"
+        aria-modal="true"
+        className="modal-surface flex max-h-[92vh] w-full max-w-5xl flex-col"
+        role="dialog"
+      >
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-line bg-panel/70 px-5 py-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-copper">Pending Review</p>
+            <h3 className="mt-1 text-lg font-semibold text-ink">待确认更新</h3>
+            <p className="mt-1 text-xs text-ink/45">
+              {draft.date} · {draft.sourceLabel} · {draft.sessionCount} 个会话
+            </p>
+          </div>
+          <button
+            type="button"
+            className="ghost-action icon-action-compact disabled:opacity-45"
+            disabled={saving || suggestionRunning}
+            onClick={requestClose}
+            title="关闭"
+            aria-label="关闭待确认更新"
+          >
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-5">
+          <input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            className="field-control field-prominent w-full text-base font-semibold"
+            aria-label="待确认回顾标题"
+          />
+          <textarea
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            className="field-control h-[min(64vh,680px)] min-h-[360px] w-full flex-1 resize-none overflow-y-auto px-4 py-3 text-sm leading-7 text-ink/76 scrollbar-thin"
+            aria-label="待确认回顾正文"
+          />
+        </div>
+
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-line bg-panel/70 px-5 py-3">
+          <div className="min-w-0 text-anywhere text-xs leading-5 text-ink/45" aria-live="polite">
+            <p>{message || (saving ? "正在保存修改。" : "停止输入约半秒后自动保存。")}</p>
+            {memoryPatchDraft && suggestionSourceOutdated && (
+              <p className="mt-1 font-medium text-copper">来源回顾已修改，现有长期记忆建议仍基于修改前的内容。</p>
+            )}
+            {memoryPatchDraft && !suggestionSourceOutdated && (
+              <p className="mt-1">长期记忆建议已保存到“记忆审核”，尚未写入长期记忆。</p>
+            )}
+            {!memoryPatchDraft && draft.memorySuggestionStatus && (
+              <p className="mt-1">{getMemorySuggestionStatusNote(draft.memorySuggestionStatus)}</p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {canGenerateSuggestion && (
+              <button
+                type="button"
+                className="soft-button action-standard disabled:opacity-55"
+                disabled={saving || suggestionRunning}
+                onClick={() => void generateSuggestion()}
+              >
+                {suggestionRunning ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                {memoryPatchDraft ? "重新生成长期记忆建议" : "生成长期记忆建议"}
+              </button>
+            )}
+            <button
+              type="button"
+              className="danger-action action-standard disabled:opacity-55"
+              disabled={saving || suggestionRunning}
+              onClick={() => void flushThen(onRequestIgnore)}
+            >
+              舍弃
+            </button>
+            <button
+              type="button"
+              className="primary-button action-standard disabled:opacity-55"
+              disabled={saving || suggestionRunning}
+              onClick={() => void flushThen(onRequestApply)}
+            >
+              替换当前回顾
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -1769,7 +2408,7 @@ function SummaryReportReaderOverlay({ report, onClose }: { report: SummaryReport
           </article>
         </div>
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-panel/70 px-5 py-3">
-          <p className="text-xs text-ink/45">只读档案；如需重新生成，请回到日志页对应日期。</p>
+          <p className="text-xs text-ink/45">此处仅供阅读；需要重新生成时，请回到对应的回顾入口。</p>
           <button className="secondary-action action-standard" onClick={onClose}>关闭</button>
         </footer>
       </section>
@@ -1780,11 +2419,19 @@ function SummaryReportReaderOverlay({ report, onClose }: { report: SummaryReport
 function ReviewReaderOverlay({
   review,
   settings,
+  memoryPatchDraft,
+  onGenerateMemorySuggestion,
   onClose,
   onSave,
 }: {
   review: CodexDailyReview;
   settings: AiSettings | null;
+  memoryPatchDraft?: MemoryPatchDraft;
+  onGenerateMemorySuggestion: (
+    source: ReviewMemorySuggestionSource,
+    onProgress?: (progress: CodexReviewProgress) => void,
+    signal?: AbortSignal,
+  ) => Promise<MemorySuggestionGenerationResult>;
   onClose: () => void;
   onSave: (id: string, patch: Partial<CodexDailyReview>) => Promise<void>;
 }) {
@@ -1794,9 +2441,12 @@ function ReviewReaderOverlay({
   const [savedContent, setSavedContent] = useState(review.content);
   const [saving, setSaving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [suggestionRunning, setSuggestionRunning] = useState(false);
   const [message, setMessage] = useState("");
   const [comparison, setComparison] = useState<CodexDailyReview | null>(null);
   const [pendingRegenerate, setPendingRegenerate] = useState(false);
+  const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const savingRef = useRef(false);
   const regeneratingRef = useRef(false);
   const regenerateAbortRef = useRef<AbortController | null>(null);
@@ -1804,6 +2454,17 @@ function ReviewReaderOverlay({
   const closeAfterRegenerateCancelRef = useRef(false);
   const aiReady = settings ? getEffectiveAiSettings(settings).keySource !== "missing" : false;
   const dirty = title.trim() !== savedTitle.trim() || content.trim() !== savedContent.trim();
+  const suggestionContentVersion = memoryPatchDraft?.sourceReviewContentVersion
+    ?? review.memorySuggestionCheckpoint?.sourceContentVersion;
+  const suggestionSourceOutdated = isMemorySuggestionSourceOutdated(
+    suggestionContentVersion,
+    title,
+    content,
+  );
+  const suggestionAlreadyResolved = review.memorySuggestionStatus === "created"
+    || review.memorySuggestionStatus === "none";
+  const canGenerateSuggestion = suggestionSourceOutdated
+    || (!memoryPatchDraft && !suggestionAlreadyResolved);
 
   const cancelRegenerate = (closeAfterCancel = false) => {
     if (!regeneratingRef.current) return;
@@ -1827,6 +2488,10 @@ function ReviewReaderOverlay({
   }, [review.id, review.title, review.content]);
 
   const requestClose = () => {
+    if (suggestionRunning) {
+      setMessage("长期记忆建议正在生成，请稍候。");
+      return;
+    }
     if (regeneratingRef.current) {
       cancelRegenerate(true);
       return;
@@ -1836,7 +2501,7 @@ function ReviewReaderOverlay({
       return;
     }
     if (dirty) {
-      setMessage("有未保存的修改，请先保存或恢复后再关闭。");
+      setDiscardConfirmOpen(true);
       return;
     }
     onClose();
@@ -1859,8 +2524,8 @@ function ReviewReaderOverlay({
     };
   }, []);
 
-  const save = async () => {
-    if (savingRef.current) return;
+  const saveCurrentReview = async () => {
+    if (savingRef.current) return false;
     savingRef.current = true;
     setSaving(true);
     setMessage("");
@@ -1868,12 +2533,35 @@ function ReviewReaderOverlay({
       await onSave(review.id, { title, content });
       setSavedTitle(title);
       setSavedContent(content);
-      setMessage("已保存这份回顾。");
+      setMessage("当前回顾已更新。");
+      return true;
     } catch (error) {
       setMessage(getSafeErrorMessage(error, "保存失败。"));
+      return false;
     } finally {
       savingRef.current = false;
       setSaving(false);
+    }
+  };
+
+  const generateMemorySuggestion = async () => {
+    if (suggestionRunning) return;
+    if (dirty) {
+      const saved = await saveCurrentReview();
+      if (!saved) return;
+    }
+    setSuggestionRunning(true);
+    setMessage("正在生成长期记忆建议。");
+    try {
+      const result = await onGenerateMemorySuggestion({
+        kind: "review",
+        review: { ...review, title, content },
+      });
+      setMessage(formatMemorySuggestionResult(result));
+    } catch (error) {
+      setMessage(getSafeErrorMessage(error, "长期记忆建议未生成，可稍后重试。"));
+    } finally {
+      setSuggestionRunning(false);
     }
   };
 
@@ -1890,21 +2578,31 @@ function ReviewReaderOverlay({
     }
     if (!pendingRegenerate) {
       setPendingRegenerate(true);
-      setMessage(`将重新读取 ${review.sessionIds.length} 个原始会话正文并调用 AI 生成新草稿；当前回顾不会被覆盖。再次点击“确认生成草稿”才会开始。`);
+      setMessage(`将重新读取 ${review.sessionIds.length} 个原始会话正文并生成新版本。当前回顾保持不变；确认生成后才会开始。`);
       return;
     }
 
     setPendingRegenerate(false);
     regeneratingRef.current = true;
     setRegenerating(true);
-    setMessage("正在生成一份新草稿，不会覆盖当前回顾。");
+    setMessage("正在生成新版本，当前回顾保持不变。");
     const controller = new AbortController();
     const jobId = createClientJobId();
     regenerateAbortRef.current = controller;
     regenerateJobIdRef.current = jobId;
     closeAfterRegenerateCancelRef.current = false;
     try {
-      const input = await readSelectedConversationSessions(review.sessionIds, jobId);
+      const input = await readSelectedConversationSessions(
+        review.sessionIds,
+        jobId,
+        review.activityDateFrom || review.activityDateTo
+          ? {
+              activityDateFrom: review.activityDateFrom,
+              activityDateTo: review.activityDateTo,
+            }
+          : undefined,
+        (event) => setMessage(toConversationReadProgressView(event).message),
+      );
       if (controller.signal.aborted) throw new DOMException("已取消生成。", "AbortError");
       const summary = await streamSummarizeConversationReview(input, settings!, () => undefined, controller.signal);
       if (controller.signal.aborted) throw new DOMException("已取消生成。", "AbortError");
@@ -1919,14 +2617,20 @@ function ReviewReaderOverlay({
         content: summary.content,
         sessionCount: input.sessions.length,
         sessionIds: input.sessions.map((session) => session.id),
+        activityDateFrom: input.activityDateFrom,
+        activityDateTo: input.activityDateTo,
         sourceReviewIds: review.sourceReviewIds ?? [],
         createdAt: "",
         updatedAt: "",
       });
-      setMessage("新草稿已生成，可在下方对比。当前回顾没有被覆盖。");
+      setMessage(
+        input.activityDateWarning
+          ? `新版本已生成，可在下方查看。当前回顾保持不变。 ${input.activityDateWarning}`
+          : "新版本已生成，可在下方查看。当前回顾保持不变。",
+      );
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        setMessage("已取消本次草稿生成。");
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+        setMessage("已停止生成，当前回顾保持不变。");
       } else {
         setMessage(getSafeErrorMessage(error, "重新生成失败。"));
       }
@@ -1951,7 +2655,7 @@ function ReviewReaderOverlay({
             <h3 className="mt-1 text-lg font-semibold text-ink">细读回顾</h3>
             <p className="mt-1 text-xs text-ink/45">{review.date} · {review.sessionCount} 个会话</p>
           </div>
-          <button className="ghost-action icon-action-compact disabled:cursor-not-allowed disabled:opacity-45" disabled={saving} onClick={requestClose} title="关闭" aria-label="关闭回顾阅读层">
+          <button className="ghost-action icon-action-compact disabled:cursor-not-allowed disabled:opacity-45" disabled={saving || suggestionRunning} onClick={requestClose} title="关闭" aria-label="关闭回顾阅读层">
             <X size={16} />
           </button>
         </header>
@@ -1976,7 +2680,7 @@ function ReviewReaderOverlay({
 
           {comparison && (
             <div className="mt-4 rounded-[8px] border border-copper/30 bg-copper/10 p-3">
-              <div className="mb-2 text-xs font-semibold text-copper">新生成草稿（未覆盖当前）</div>
+              <div className="mb-2 text-xs font-semibold text-copper">待确认更新</div>
               <h4 className="text-sm font-semibold text-ink">{comparison.title}</h4>
               <p className="mt-2 max-h-[240px] overflow-y-auto whitespace-pre-wrap text-anywhere pr-1 text-sm leading-7 text-ink/64 scrollbar-thin">{comparison.content}</p>
               <button
@@ -1984,17 +2688,28 @@ function ReviewReaderOverlay({
                 onClick={() => {
                   setTitle(comparison.title);
                   setContent(comparison.content);
-                  setMessage("草稿已放入编辑区，确认无误后保存即可替换正式回顾。");
+                  setMessage("新版本已载入编辑区，保存后将替换当前回顾。");
                 }}
               >
-                采用这份草稿
+                使用此版本
               </button>
             </div>
           )}
         </div>
 
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-panel/70 px-5 py-3">
-          <p className="min-w-0 text-anywhere text-xs text-ink/45">{message || "可以直接编辑标题和正文，再保存为你的版本。"}</p>
+          <div className="min-w-0 text-anywhere text-xs leading-5 text-ink/45" aria-live="polite">
+            <p>{message || "可直接编辑标题和正文；保存后将替换当前回顾。"}</p>
+            {memoryPatchDraft && suggestionSourceOutdated && (
+              <p className="mt-1 font-medium text-copper">来源回顾已修改，现有长期记忆建议仍基于修改前的内容。</p>
+            )}
+            {memoryPatchDraft && !suggestionSourceOutdated && (
+              <p className="mt-1">长期记忆建议已保存到“记忆审核”，尚未写入长期记忆。</p>
+            )}
+            {!memoryPatchDraft && review.memorySuggestionStatus && (
+              <p className="mt-1">{getMemorySuggestionStatusNote(review.memorySuggestionStatus)}</p>
+            )}
+          </div>
           <div className="flex gap-2">
             {dirty && (
               <button
@@ -2014,25 +2729,58 @@ function ReviewReaderOverlay({
                 停止
               </button>
             )}
+            {canGenerateSuggestion && (
+              <button
+                className="soft-button action-standard text-xs font-medium disabled:opacity-60"
+                disabled={saving || regenerating || suggestionRunning}
+                onClick={() => void generateMemorySuggestion()}
+              >
+                {suggestionRunning ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                {memoryPatchDraft ? "重新生成长期记忆建议" : "生成长期记忆建议"}
+              </button>
+            )}
             <button
               className="soft-button action-standard text-xs font-medium disabled:opacity-60"
-              disabled={regenerating}
+              disabled={regenerating || suggestionRunning}
               onClick={regenerate}
             >
               {regenerating ? <RefreshCw size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-              {pendingRegenerate ? "确认生成草稿" : "生成新草稿"}
+              {pendingRegenerate ? "确认生成" : "生成新版本"}
             </button>
             <button
               className="primary-button action-standard text-xs disabled:opacity-60"
-              disabled={saving}
-              onClick={save}
+              disabled={saving || suggestionRunning}
+              onClick={() => setSaveConfirmOpen(true)}
             >
               {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
-              保存
+              替换当前回顾
             </button>
           </div>
         </footer>
       </section>
+      <ConfirmDialog
+        open={saveConfirmOpen}
+        title="替换当前回顾？"
+        message="确认后将以当前编辑内容替换这份回顾。"
+        confirmLabel="确认替换"
+        onCancel={() => setSaveConfirmOpen(false)}
+        onConfirm={async () => {
+          await saveCurrentReview();
+          setSaveConfirmOpen(false);
+        }}
+      />
+      <ConfirmDialog
+        open={discardConfirmOpen}
+        title="放弃未保存的修改？"
+        message="放弃后，当前编辑内容将无法恢复。"
+        confirmLabel="放弃修改"
+        danger
+        onCancel={() => setDiscardConfirmOpen(false)}
+        onConfirm={() => {
+          setDiscardConfirmOpen(false);
+          onClose();
+        }}
+      />
     </div>
   );
 }
@@ -2053,13 +2801,6 @@ function getSummaryReportLabel(periodType: SummaryReport["periodType"]) {
   if (periodType === "day") return "日总结";
   if (periodType === "week") return "周回顾";
   return "月回顾";
-}
-
-function createReviewKeyFromSelection(sessions: CodexSessionIndex[]) {
-  const first = sessions[0];
-  const sourceKinds = Array.from(new Set(sessions.map((session) => session.sourceKind)));
-  const sourceKey = sourceKinds.length === 1 ? sourceKinds[0] : "mixed";
-  return `${first?.date ?? "selected"}:source:${sourceKey}`;
 }
 
 function LegacyMemorySection({
@@ -2146,28 +2887,33 @@ function LegacyMemorySection({
 
 function MemoryPrinciples() {
   return (
-    <section className="section-surface space-y-3">
-      <div className="flex items-center gap-2 text-sm font-semibold text-ink">
-        <BookOpenText size={16} />
-        留下什么
-      </div>
+    <div className="divide-y divide-line">
       <CodexGuard title="稳定" text="偏好、长期约束、项目方向和反复出现的原则。" />
       <CodexGuard title="克制" text="少写，写准；宁可留下背景，不留下噪声。" />
       <CodexGuard title="安全" text="密钥、临时路径、命令输出和报错碎片不进入长期记忆。" />
-    </section>
+    </div>
   );
 }
 
 function CodexGuard({ title, text }: { title: string; text: string }) {
   return (
-    <div className="rounded-[8px] border border-line bg-panel/70 p-3">
-      <div className="mb-1 flex items-center gap-2 text-xs font-semibold text-ink">
+    <div className="py-5 first:pt-2">
+      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-ink">
         <ShieldCheck size={14} className="text-moss" />
         {title}
       </div>
-      <p className="text-xs leading-5 text-ink/45">{text}</p>
+      <p className="text-xs leading-6 text-ink/48">{text}</p>
     </div>
   );
+}
+
+function getMemorySuggestionStatusNote(status: MemorySuggestionCheckpointStatus) {
+  if (status === "created") return "长期记忆建议已生成，等待审核。";
+  if (status === "none") return "本次未发现需要长期保留的新信息。";
+  if (status === "failed") return "长期记忆建议未生成，可单独重试。";
+  if (status === "cancelled") return "长期记忆建议生成已取消，可单独重试。";
+  if (status === "running") return "正在分析长期记忆建议。";
+  return "长期记忆建议等待处理。";
 }
 
 function readMemoryDocumentDraft(

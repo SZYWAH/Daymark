@@ -20,15 +20,24 @@ import { animate } from "animejs";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getEffectiveAiSettings, type CodexReviewProgress } from "../ai/deepseek";
 import { PageWorkspace } from "./PageWorkspace";
+import { ReviewProgressIndicator } from "./ReviewProgressIndicator";
 import { AutoWorkReviewStatusRow, RollingWorkReviewReaderOverlay } from "./TodayAutoWorkReview";
 import {
   cancelConversationReviewJob,
-  indexConversationSessions,
   isDesktopRuntime,
   readSelectedConversationSessions,
+  scanConversationSessionsExact,
 } from "../lib/desktop";
+import {
+  markConversationDateIndexUserScanCompleted,
+  pauseConversationDateIndexCompletion,
+  startConversationDateIndexCompletion,
+} from "../lib/conversationDateIndex";
 import { toDateKey } from "../lib/date";
+import { toConversationReadProgressView } from "../lib/conversationReadProgress";
 import { getSafeErrorMessage } from "../lib/redaction";
+import { formatConversationScanProgress } from "../lib/conversationScanProgress";
+import { formatReviewGenerationResult } from "../lib/reviewGenerationResult";
 import type {
   AiSettings,
   AutoWorkReviewSettings,
@@ -40,6 +49,7 @@ import type {
   EntityKind,
   MemorySubView,
   MemoryPatchDraft,
+  MemorySuggestionStatus,
   RollingWorkReview,
   SmartView,
   TodayDashboardData,
@@ -49,6 +59,7 @@ type GenerateReviewResult = {
   review: CodexDailyReview;
   patchDraft?: MemoryPatchDraft;
   replacementDraft?: boolean;
+  memorySuggestionStatus: MemorySuggestionStatus;
 };
 
 type TodayPageProps = {
@@ -611,6 +622,15 @@ function TodayReviewPanel({
   const desktop = isDesktopRuntime();
   const aiReady = settings ? getEffectiveAiSettings(settings).keySource !== "missing" : false;
 
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      if (jobIdRef.current) {
+        void cancelConversationReviewJob(jobIdRef.current);
+      }
+    };
+  }, []);
+
   const todayReviews = useMemo(
     () => codexReviews.filter((review) => review.date === todayKey),
     [codexReviews, todayKey],
@@ -640,22 +660,39 @@ function TodayReviewPanel({
     setProgress(null);
     setPendingSource(null);
     setPendingCombined(false);
+    const scanJobId = createClientJobId();
+    jobIdRef.current = scanJobId;
     try {
-      const result = await indexConversationSessions({
-        sourceKinds: ["codex", "claude"],
-        dateFrom: todayKey,
-        dateTo: todayKey,
-        limit: 120,
-      });
-      setSessions(result);
-      await onReplaceCodexSessionIndex(result);
-      setMessage(result.length > 0 ? `今天找到 ${result.length} 个会话。生成时才会读取正文。` : "今天没有找到可回顾的 AI 会话。");
-      return result;
+      await pauseConversationDateIndexCompletion();
+      const result = await scanConversationSessionsExact(
+        {
+          sourceKinds: ["codex", "claude"],
+          dateFrom: todayKey,
+          dateTo: todayKey,
+          limit: 120,
+        },
+        scanJobId,
+        (event) => {
+          if (jobIdRef.current !== scanJobId) return;
+          setMessage(formatConversationScanProgress(event, "今天的消息"));
+        },
+      );
+      setSessions(result.sessions);
+      await onReplaceCodexSessionIndex(result.sessions);
+      setMessage(
+        result.sessions.length > 0
+          ? `今天找到 ${result.sessions.length} 个有消息的会话，已排除 ${result.excludedCount} 个仅活动区间覆盖今天的候选。生成时才会读取正文。`
+          : "今天没有找到包含实际消息的 AI 会话。",
+      );
+      markConversationDateIndexUserScanCompleted();
+      startConversationDateIndexCompletion({ sourceKinds: ["codex", "claude"] });
+      return result.sessions;
     } catch (error) {
       const text = getSafeErrorMessage(error, "扫描今日会话失败。");
       setMessage(text);
       return [];
     } finally {
+      if (jobIdRef.current === scanJobId) jobIdRef.current = "";
       setScanning(false);
     }
   };
@@ -679,8 +716,8 @@ function TodayReviewPanel({
       }
       setMessage(
         count > 0
-          ? `已找到 ${count} 个 ${sourceLabels[sourceKind]} 会话。再次点击“确认生成”才会读取正文并开始生成。`
-          : `今天没有找到 ${sourceLabels[sourceKind]} 会话。`,
+          ? `找到 ${count} 个今天有活动的 ${sourceLabels[sourceKind]} 会话。确认生成后才会读取正文。`
+          : `今天没有找到有活动的 ${sourceLabels[sourceKind]} 会话。`,
       );
       return;
     }
@@ -689,7 +726,7 @@ function TodayReviewPanel({
     const selected = available.filter((session) => session.sourceKind === sourceKind);
     if (selected.length === 0) {
       setPendingSource(null);
-      setMessage(`今天没有找到 ${sourceLabels[sourceKind]} 会话。`);
+      setMessage(`今天没有找到有活动的 ${sourceLabels[sourceKind]} 会话。`);
       return;
     }
 
@@ -697,7 +734,7 @@ function TodayReviewPanel({
       const selectedBytes = selected.reduce((sum, session) => sum + session.sizeBytes, 0);
       setPendingSource(sourceKind);
       setProgress(null);
-      setMessage(`将读取 ${selected.length} 个 ${sourceLabels[sourceKind]} 会话正文（约 ${formatBytes(selectedBytes)}），调用 AI 生成回顾，并可能结合长期记忆生成待审核建议。再次点击“确认生成”才会开始。`);
+      setMessage(`将读取 ${selected.length} 个今天有活动的 ${sourceLabels[sourceKind]} 会话正文（约 ${formatBytes(selectedBytes)}），并调用 AI 生成回顾。确认生成后才会开始。`);
       return;
     }
 
@@ -711,24 +748,36 @@ function TodayReviewPanel({
     setMessage("");
 
     try {
-      const input = await readSelectedConversationSessions(selected.map((session) => session.id), jobId);
+      const input = await readSelectedConversationSessions(
+        selected.map((session) => session.id),
+        jobId,
+        {
+          activityDateFrom: todayKey,
+          activityDateTo: todayKey,
+        },
+        (event) => setProgress(toConversationReadProgressView(event)),
+      );
       if (controller.signal.aborted) throw new DOMException("已取消生成。", "AbortError");
       const result = await onGenerateCodexReview(
         input,
         (nextProgress) => setProgress(nextProgress),
         controller.signal,
       );
+      const resultMessage = formatReviewGenerationResult(result);
       setMessage(
-        result.replacementDraft
-          ? `已生成 ${sourceLabels[sourceKind]} 今日回顾新版本，并保存为替换草稿；原回顾没有被覆盖。`
-          : result.patchDraft
-          ? `已生成 ${sourceLabels[sourceKind]} 今日回顾，并提出记忆修改建议。`
-          : `已生成 ${sourceLabels[sourceKind]} 今日回顾。记忆修改建议未生成，可稍后在 AI 回顾台重试。`,
+        input.activityDateWarning
+          ? `${resultMessage} ${input.activityDateWarning}`
+          : resultMessage,
       );
     } catch (error) {
-      setMessage(getSafeErrorMessage(error, "生成今日回顾失败。"));
+      setMessage(
+        controller.signal.aborted
+          ? "已停止生成。"
+          : getSafeErrorMessage(error, "生成今日回顾失败。"),
+      );
     } finally {
       setGeneratingSource(null);
+      setProgress(null);
       abortRef.current = null;
       jobIdRef.current = "";
     }
@@ -750,7 +799,7 @@ function TodayReviewPanel({
       setPendingCombined(true);
       setPendingSource(null);
       setProgress(null);
-      setMessage("合成总回顾会把 Codex 与 Claude Code 的今日回顾一起发送给 AI，并可能生成待审核的记忆建议。再次点击“确认合成”才会开始。");
+      setMessage("合成今日回顾会将 Codex 与 Claude Code 的回顾发送给 AI。确认生成后才会开始。");
       return;
     }
 
@@ -759,22 +808,17 @@ function TodayReviewPanel({
     setGeneratingSource("combined");
     setPendingSource(null);
     setPendingCombined(false);
-    setProgress({ stage: "合成每日回顾", message: "正在合成 Codex 与 Claude Code 的今日总回顾。" });
+    setProgress({ stage: "生成回顾", message: "正在生成今日回顾。" });
     setMessage("");
 
     try {
       const result = await onGenerateCombinedReview(sourceReviews, (nextProgress) => setProgress(nextProgress), controller.signal);
-      setMessage(
-        result.replacementDraft
-          ? "已合成今日总回顾新版本，并保存为替换草稿；原综合回顾没有被覆盖。"
-          : result.patchDraft
-          ? "已合成今日总回顾，并提出记忆修改建议。"
-          : "已合成今日总回顾。记忆修改建议未生成，可稍后在 AI 回顾台重试。",
-      );
+      setMessage(formatReviewGenerationResult(result));
     } catch (error) {
       setMessage(getSafeErrorMessage(error, "合成今日总回顾失败。"));
     } finally {
       setGeneratingSource(null);
+      setProgress(null);
       abortRef.current = null;
     }
   };
@@ -868,8 +912,11 @@ function TodayReviewPanel({
         {(message || progress || cancelledDraft) && (
           <div className="rounded-[8px] border border-line bg-panel/75 px-3 py-2 text-xs leading-5 text-ink/58">
             {progress && (
-              <div className="mb-1 font-medium text-copper">
-                {progress.stage}：{progress.message}
+              <div className="mb-1">
+                <div className="font-medium text-copper">
+                  {progress.stage}：{progress.message}
+                </div>
+                <ReviewProgressIndicator progress={progress} />
               </div>
             )}
             {message && <div>{message}</div>}

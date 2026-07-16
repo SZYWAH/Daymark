@@ -260,10 +260,20 @@ fn openai_responses_request_body(request: &AiGenerateRequest, stream: bool) -> V
         ("stream".into(), json!(stream)),
         ("store".into(), json!(false)),
     ]);
-    if let Some(system) = request.system.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(system) = request
+        .system
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         body.insert("instructions".into(), json!(system));
     }
-    if let Some(effort) = request.reasoning_effort.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(effort) = request
+        .reasoning_effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         body.insert("reasoning".into(), json!({ "effort": effort }));
     }
     Value::Object(body)
@@ -416,11 +426,15 @@ fn validate_completion_status(protocol: AiProtocol, value: &Value) -> Result<(),
         return Ok(());
     }
     match value.get("status").and_then(Value::as_str) {
-        Some("failed") => Err(value.pointer("/error/message").and_then(Value::as_str)
+        Some("failed") => Err(value
+            .pointer("/error/message")
+            .and_then(Value::as_str)
             .map(safe_service_error)
             .filter(|message| !message.is_empty())
             .unwrap_or_else(|| "Responses request failed.".to_string())),
-        Some("incomplete") => Err(value.pointer("/incomplete_details/reason").and_then(Value::as_str)
+        Some("incomplete") => Err(value
+            .pointer("/incomplete_details/reason")
+            .and_then(Value::as_str)
             .map(safe_service_error)
             .filter(|message| !message.is_empty())
             .unwrap_or_else(|| "Responses request was incomplete.".to_string())),
@@ -453,12 +467,38 @@ fn completion_content(protocol: AiProtocol, value: &Value) -> Option<String> {
 }
 
 fn responses_content(value: &Value) -> Option<String> {
-    if let Some(output_text) = value.get("output_text").and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()) {
+    if let Some(output_text) = value
+        .get("output_text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
         return Some(output_text.to_string());
     }
-    let text = value.get("output")?.as_array()?.iter()
-        .filter_map(|item| item.get("content").and_then(Value::as_array))
+    let text = value
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
         .flatten()
+        .filter_map(response_output_item_content)
+        .collect::<String>();
+    let trimmed = text.trim();
+    if !trimmed.is_empty() {
+        return Some(trimmed.to_string());
+    }
+    value
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn response_output_item_content(item: &Value) -> Option<String> {
+    let text = item
+        .get("content")?
+        .as_array()?
+        .iter()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("output_text"))
         .filter_map(|block| block.get("text").and_then(Value::as_str))
         .collect::<String>();
@@ -485,24 +525,43 @@ fn stream_piece(protocol: AiProtocol, value: &Value) -> Result<StreamPiece, Stri
             .map(|value| StreamPiece::Token(value.to_string()))
             .unwrap_or(StreamPiece::None)),
         AiProtocol::OpenaiResponses => match value.get("type").and_then(Value::as_str) {
-            Some("response.output_text.delta") => Ok(value.get("delta").and_then(Value::as_str)
+            Some("response.output_text.delta") => Ok(value
+                .get("delta")
+                .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
                 .map(|value| StreamPiece::Token(value.to_string()))
                 .unwrap_or(StreamPiece::None)),
-            Some("response.completed") => Ok(StreamPiece::Completed(
-                value.get("response").and_then(responses_content)
+            Some("response.output_text.done") => Ok(StreamPiece::Completed(
+                value
+                    .get("text")
+                    .or_else(|| value.get("delta"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             )),
-            Some("response.failed") => Err(value.pointer("/response/error/message")
+            Some("response.output_item.done") => Ok(StreamPiece::Completed(
+                value.get("item").and_then(response_output_item_content),
+            )),
+            Some("response.completed") => Ok(StreamPiece::Completed(
+                value.get("response").and_then(responses_content),
+            )),
+            Some("response.failed") => Err(value
+                .pointer("/response/error/message")
                 .and_then(Value::as_str)
                 .map(safe_service_error)
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "Responses request failed.".to_string())),
-            Some("response.incomplete") => Err(value.pointer("/response/incomplete_details/reason")
+            Some("response.incomplete") => Err(value
+                .pointer("/response/incomplete_details/reason")
                 .and_then(Value::as_str)
                 .map(safe_service_error)
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "Responses request was incomplete.".to_string())),
-            _ => Ok(StreamPiece::None),
+            _ => Ok(value
+                .pointer("/choices/0/delta/content")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(|value| StreamPiece::Token(value.to_string()))
+                .unwrap_or(StreamPiece::None)),
         },
         AiProtocol::AnthropicMessages => {
             let is_text_delta = value.get("type").and_then(Value::as_str)
@@ -618,7 +677,8 @@ pub(crate) async fn ai_generate_stream(
 }
 
 fn model_endpoint_candidates(base_url: &str) -> Result<Vec<reqwest::Url>, String> {
-    let mut base = reqwest::Url::parse(base_url.trim()).map_err(|_| "Base URL 不是有效地址。".to_string())?;
+    let mut base =
+        reqwest::Url::parse(base_url.trim()).map_err(|_| "Base URL 不是有效地址。".to_string())?;
     if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
         return Err("Base URL 只支持 http 或 https。".into());
     }
@@ -633,14 +693,29 @@ fn model_endpoint_candidates(base_url: &str) -> Result<Vec<reqwest::Url>, String
         }
     }
     let ends_v1 = path.to_ascii_lowercase().ends_with("/v1");
-    let primary = if ends_v1 { format!("{path}/models") } else { format!("{path}/v1/models") };
-    let fallback_base = if ends_v1 { &path[..path.len() - 3] } else { path.as_str() };
+    let primary = if ends_v1 {
+        format!("{path}/models")
+    } else {
+        format!("{path}/v1/models")
+    };
+    let fallback_base = if ends_v1 {
+        &path[..path.len() - 3]
+    } else {
+        path.as_str()
+    };
     let fallback = format!("{fallback_base}/models");
     let mut endpoints = Vec::new();
     for candidate in [primary, fallback] {
         let mut endpoint = base.clone();
-        endpoint.set_path(if candidate.is_empty() { "/models" } else { &candidate });
-        if !endpoints.iter().any(|current: &reqwest::Url| current == &endpoint) {
+        endpoint.set_path(if candidate.is_empty() {
+            "/models"
+        } else {
+            &candidate
+        });
+        if !endpoints
+            .iter()
+            .any(|current: &reqwest::Url| current == &endpoint)
+        {
             endpoints.push(endpoint);
         }
     }
@@ -664,29 +739,63 @@ pub(crate) async fn list_ai_models(
     let mut last_not_found = None;
 
     for endpoint in endpoints {
-        let response = http.get(endpoint).header(AUTHORIZATION, authorization.clone()).send().await
+        let response = http
+            .get(endpoint)
+            .header(AUTHORIZATION, authorization.clone())
+            .send()
+            .await
             .map_err(|error| {
-                if error.is_timeout() { "获取模型列表超时。".to_string() }
-                else if error.is_connect() { "无法连接模型列表接口，请检查地址、网络或代理。".to_string() }
-                else { "获取模型列表的网络请求失败。".to_string() }
+                if error.is_timeout() {
+                    "获取模型列表超时。".to_string()
+                } else if error.is_connect() {
+                    "无法连接模型列表接口，请检查地址、网络或代理。".to_string()
+                } else {
+                    "获取模型列表的网络请求失败。".to_string()
+                }
             })?;
         if response.status().as_u16() == 404 {
             last_not_found = Some(checked_response(response).await.unwrap_err());
             continue;
         }
         let response = checked_response(response).await?;
-        let value = response.json::<Value>().await
+        let value = response
+            .json::<Value>()
+            .await
             .map_err(|_| "模型列表返回的 JSON 无法解析。".to_string())?;
-        let data = value.get("data").and_then(Value::as_array)
+        let data = value
+            .get("data")
+            .and_then(Value::as_array)
             .ok_or_else(|| "模型列表格式不兼容：缺少 data 数组。".to_string())?;
         let allowed = ["none", "minimal", "low", "medium", "high", "xhigh"];
         let mut models = HashMap::<String, AiModelOption>::new();
         for item in data {
-            let Some(id) = item.get("id").and_then(Value::as_str).map(str::trim).filter(|id| !id.is_empty()) else { continue };
-            let efforts = item.get("supported_reasoning_efforts").and_then(Value::as_array).map(|values| {
-                values.iter().filter_map(Value::as_str).filter(|value| allowed.contains(value)).map(str::to_string).collect::<Vec<_>>()
-            }).filter(|values| !values.is_empty());
-            models.insert(id.to_string(), AiModelOption { id: id.to_string(), supported_reasoning_efforts: efforts });
+            let Some(id) = item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+            else {
+                continue;
+            };
+            let efforts = item
+                .get("supported_reasoning_efforts")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter(|value| allowed.contains(value))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .filter(|values| !values.is_empty());
+            models.insert(
+                id.to_string(),
+                AiModelOption {
+                    id: id.to_string(),
+                    supported_reasoning_efforts: efforts,
+                },
+            );
         }
         let mut models = models.into_values().collect::<Vec<_>>();
         models.sort_by(|left, right| left.id.cmp(&right.id));
@@ -860,16 +969,17 @@ mod tests {
             StreamPiece::Token("hello".into())
         );
         assert!(
-            parse_sse_line(AiProtocol::AnthropicMessages, r#"data: {"type":"ping"}"#)
-                .unwrap()
+            parse_sse_line(AiProtocol::AnthropicMessages, r#"data: {"type":"ping"}"#).unwrap()
                 == StreamPiece::None
         );
-        assert!(parse_sse_line(
-            AiProtocol::AnthropicMessages,
-            r#"data: {"type":"future_event"}"#
-        )
-        .unwrap()
-        == StreamPiece::None);
+        assert!(
+            parse_sse_line(
+                AiProtocol::AnthropicMessages,
+                r#"data: {"type":"future_event"}"#
+            )
+            .unwrap()
+                == StreamPiece::None
+        );
         assert!(parse_sse_line(
             AiProtocol::AnthropicMessages,
             r#"data: {"type":"error","error":{"message":"overloaded"}}"#
@@ -887,7 +997,10 @@ mod tests {
 
     #[test]
     fn responses_body_uses_store_false_and_standard_content() {
-        let mut input = request(AiProtocol::OpenaiResponses, "https://api.example.com/v1/responses");
+        let mut input = request(
+            AiProtocol::OpenaiResponses,
+            "https://api.example.com/v1/responses",
+        );
         input.reasoning_effort = Some("xhigh".into());
         input.messages[0].content.push(AiContentBlock::Image {
             media_type: "image/png".into(),
@@ -897,7 +1010,10 @@ mod tests {
         assert_eq!(body["instructions"], "system instruction");
         assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
         assert_eq!(body["input"][0]["content"][1]["type"], "input_image");
-        assert_eq!(body["input"][0]["content"][1]["image_url"], "data:image/png;base64,aGVsbG8=");
+        assert_eq!(
+            body["input"][0]["content"][1]["image_url"],
+            "data:image/png;base64,aGVsbG8="
+        );
         assert_eq!(body["store"], false);
         assert_eq!(body["reasoning"]["effort"], "xhigh");
         assert!(body.get("temperature").is_none());
@@ -908,21 +1024,53 @@ mod tests {
     #[test]
     fn responses_completion_and_stream_events_are_parsed() {
         assert_eq!(
-            completion_content(AiProtocol::OpenaiResponses, &json!({
-                "output": [{"content": [
-                    {"type": "output_text", "text": "hello "},
-                    {"type": "refusal", "refusal": "ignored"},
-                    {"type": "output_text", "text": "world"}
-                ]}]
-            })).as_deref(),
+            completion_content(
+                AiProtocol::OpenaiResponses,
+                &json!({
+                    "output": [{"content": [
+                        {"type": "output_text", "text": "hello "},
+                        {"type": "refusal", "refusal": "ignored"},
+                        {"type": "output_text", "text": "world"}
+                    ]}]
+                })
+            )
+            .as_deref(),
             Some("hello world")
         );
         assert_eq!(
-            parse_sse_line(AiProtocol::OpenaiResponses, r#"data: {"type":"response.output_text.delta","delta":"hello"}"#).unwrap(),
+            parse_sse_line(
+                AiProtocol::OpenaiResponses,
+                r#"data: {"type":"response.output_text.delta","delta":"hello"}"#
+            )
+            .unwrap(),
             StreamPiece::Token("hello".into())
         );
+        assert_eq!(
+            parse_sse_line(
+                AiProtocol::OpenaiResponses,
+                r#"data: {"type":"response.output_text.done","text":"gateway text"}"#
+            )
+            .unwrap(),
+            StreamPiece::Completed(Some("gateway text".into()))
+        );
+        assert_eq!(
+            parse_sse_line(AiProtocol::OpenaiResponses, r#"data: {"type":"response.output_item.done","item":{"content":[{"type":"output_text","text":"item text"}]}}"#).unwrap(),
+            StreamPiece::Completed(Some("item text".into()))
+        );
+        assert_eq!(
+            parse_sse_line(
+                AiProtocol::OpenaiResponses,
+                r#"data: {"choices":[{"delta":{"content":"chat-shaped gateway text"}}]}"#
+            )
+            .unwrap(),
+            StreamPiece::Token("chat-shaped gateway text".into())
+        );
         assert!(parse_sse_line(AiProtocol::OpenaiResponses, r#"data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}"#).is_err());
-        assert!(validate_completion_status(AiProtocol::OpenaiResponses, &json!({"status":"failed","error":{"message":"bad request"}})).is_err());
+        assert!(validate_completion_status(
+            AiProtocol::OpenaiResponses,
+            &json!({"status":"failed","error":{"message":"bad request"}})
+        )
+        .is_err());
     }
 
     #[test]

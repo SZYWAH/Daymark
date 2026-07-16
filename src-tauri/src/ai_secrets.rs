@@ -40,7 +40,11 @@ pub(crate) fn write_ai_api_key(
 }
 
 #[tauri::command]
-pub(crate) fn delete_ai_api_key(window: WebviewWindow, provider: String, base_url: String) -> Result<(), String> {
+pub(crate) fn delete_ai_api_key(
+    window: WebviewWindow,
+    provider: String,
+    base_url: String,
+) -> Result<(), String> {
     ensure_main_window(&window)?;
     let entry = ai_api_key_entry(&provider, &base_url)?;
     match entry.delete_credential() {
@@ -87,7 +91,9 @@ pub(crate) fn normalize_ai_key_base_url(base_url: &str) -> Result<String, String
             .unwrap_or(rest.len());
         let host = rest[..split_at].to_ascii_lowercase();
         let suffix = &rest[split_at..];
-        return Ok(format!("{}://{}{}", scheme, host, suffix).trim_end_matches('/').to_string());
+        return Ok(format!("{}://{}{}", scheme, host, suffix)
+            .trim_end_matches('/')
+            .to_string());
     }
 
     Ok(trimmed.to_string())

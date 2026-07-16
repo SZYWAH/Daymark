@@ -74,7 +74,11 @@ pub(crate) fn check_local_path(window: WebviewWindow, path: String) -> PathStatu
     match std::fs::metadata(Path::new(trimmed)) {
         Ok(metadata) => PathStatus {
             exists: true,
-            kind: Some(if metadata.is_dir() { "directory" } else { "file" }),
+            kind: Some(if metadata.is_dir() {
+                "directory"
+            } else {
+                "file"
+            }),
             message: None,
         },
         Err(error) => PathStatus {
@@ -86,7 +90,11 @@ pub(crate) fn check_local_path(window: WebviewWindow, path: String) -> PathStatu
 }
 
 #[tauri::command]
-pub(crate) fn write_text_file(window: WebviewWindow, path: String, contents: String) -> Result<(), String> {
+pub(crate) fn write_text_file(
+    window: WebviewWindow,
+    path: String,
+    contents: String,
+) -> Result<(), String> {
     ensure_main_window(&window)?;
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -131,10 +139,11 @@ pub(crate) fn read_text_file(window: WebviewWindow, path: String) -> Result<Stri
     fs::read_to_string(&path_buf).map_err(|error| format!("读取文件失败：{}", error))
 }
 
-
 #[tauri::command]
 pub(crate) fn get_supported_file_analysis_types() -> Vec<&'static str> {
-    vec!["txt", "md", "markdown", "csv", "pdf", "docx", "pptx", "xlsx"]
+    vec![
+        "txt", "md", "markdown", "csv", "pdf", "docx", "pptx", "xlsx",
+    ]
 }
 
 #[tauri::command]
@@ -143,7 +152,10 @@ pub(crate) fn get_supported_vision_types() -> Vec<&'static str> {
 }
 
 #[tauri::command]
-pub(crate) fn extract_local_image_data(window: WebviewWindow, path: String) -> Result<ImageDataExtractResult, String> {
+pub(crate) fn extract_local_image_data(
+    window: WebviewWindow,
+    path: String,
+) -> Result<ImageDataExtractResult, String> {
     ensure_main_window(&window)?;
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -204,7 +216,10 @@ pub(crate) fn extract_local_image_data(window: WebviewWindow, path: String) -> R
 }
 
 #[tauri::command]
-pub(crate) fn extract_local_file_text(window: WebviewWindow, path: String) -> Result<FileTextExtractResult, String> {
+pub(crate) fn extract_local_file_text(
+    window: WebviewWindow,
+    path: String,
+) -> Result<FileTextExtractResult, String> {
     ensure_main_window(&window)?;
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -250,7 +265,11 @@ pub(crate) fn extract_local_file_text(window: WebviewWindow, path: String) -> Re
             &mut warnings,
         )?,
         "pptx" => extract_office_text(&path_buf, &["ppt/slides/slide"], &mut warnings)?,
-        "xlsx" => extract_office_text(&path_buf, &["xl/sharedStrings.xml", "xl/worksheets/sheet"], &mut warnings)?,
+        "xlsx" => extract_office_text(
+            &path_buf,
+            &["xl/sharedStrings.xml", "xl/worksheets/sheet"],
+            &mut warnings,
+        )?,
         _ => {
             return Err(format!(
                 "暂不支持 .{} 文件的正文提取。当前支持：{}",
@@ -331,14 +350,14 @@ pub(crate) fn finalize_file_text(
     }
 }
 
-
 fn extract_plain_text(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|error| format!("读取文件失败：{}", error))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn extract_pdf_text(path: &Path, warnings: &mut Vec<String>) -> Result<String, String> {
-    let document = lopdf::Document::load(path).map_err(|error| format!("PDF 解析失败：{}", error))?;
+    let document =
+        lopdf::Document::load(path).map_err(|error| format!("PDF 解析失败：{}", error))?;
     let pages = document.get_pages();
     let page_numbers = pages.keys().copied().collect::<Vec<_>>();
     if page_numbers.is_empty() {
@@ -350,9 +369,14 @@ fn extract_pdf_text(path: &Path, warnings: &mut Vec<String>) -> Result<String, S
         .map_err(|error| format!("PDF 文本提取失败：{}", error))
 }
 
-fn extract_office_text(path: &Path, prefixes: &[&str], warnings: &mut Vec<String>) -> Result<String, String> {
+fn extract_office_text(
+    path: &Path,
+    prefixes: &[&str],
+    warnings: &mut Vec<String>,
+) -> Result<String, String> {
     let file = fs::File::open(path).map_err(|error| format!("打开 Office 文件失败：{}", error))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| format!("Office 文件解包失败：{}", error))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| format!("Office 文件解包失败：{}", error))?;
     let mut output = String::new();
 
     for index in 0..archive.len() {
@@ -364,7 +388,10 @@ fn extract_office_text(path: &Path, prefixes: &[&str], warnings: &mut Vec<String
             continue;
         }
         if entry.size() > FILE_TEXT_MAX_OFFICE_XML_BYTES {
-            warnings.push(format!("Office internal xml {} is large; reading it with the normal extraction limit.", name));
+            warnings.push(format!(
+                "Office internal xml {} is large; reading it with the normal extraction limit.",
+                name
+            ));
         }
 
         let mut xml = String::new();
@@ -584,7 +611,12 @@ fn compact_text(value: &str) -> String {
     output.trim().to_string()
 }
 
-pub(crate) fn classify_file_text_quality(extension: &str, size_bytes: u64, text: &str, warnings: &[String]) -> &'static str {
+pub(crate) fn classify_file_text_quality(
+    extension: &str,
+    size_bytes: u64,
+    text: &str,
+    warnings: &[String],
+) -> &'static str {
     let char_count = text.trim().chars().count();
     if char_count == 0 {
         return "empty";
@@ -595,7 +627,10 @@ pub(crate) fn classify_file_text_quality(extension: &str, size_bytes: u64, text:
         .iter()
         .any(|warning| warning.to_lowercase().contains("skipped") || warning.contains("没有"));
 
-    if (likely_binary_document && char_count < 200) || (size_bytes > 16_000 && char_count < 200) || skipped_main_content {
+    if (likely_binary_document && char_count < 200)
+        || (size_bytes > 16_000 && char_count < 200)
+        || skipped_main_content
+    {
         return "low";
     }
 

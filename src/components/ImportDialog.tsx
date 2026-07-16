@@ -2,6 +2,7 @@ import { Archive, FileText, FolderOpen, Globe2, Plus, Trash2, X, type LucideIcon
 import { animate } from "animejs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FolderPicker } from "./FolderPicker";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { SelectMenu } from "./SelectMenu";
 import { isDesktopRuntime, pickLocalFiles, pickLocalFolder } from "../lib/desktop";
 import { getSafeErrorMessage } from "../lib/redaction";
@@ -67,10 +68,9 @@ export function ImportDialog({
   const [batchDrafts, setBatchDrafts] = useState<ImportDraft[]>([]);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [pendingDiscard, setPendingDiscard] = useState<"close" | "batch" | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const savingRef = useRef(false);
-  const pendingCloseRef = useRef(false);
-  const pendingBatchDiscardRef = useRef(false);
   const desktop = isDesktopRuntime();
   const batchMode = batchDrafts.length > 0;
   const dirty = Boolean(
@@ -92,8 +92,7 @@ export function ImportDialog({
     setBatchDrafts([]);
     setMessage("");
     setMode("card");
-    pendingCloseRef.current = false;
-    pendingBatchDiscardRef.current = false;
+    setPendingDiscard(null);
   };
 
   const close = (force = false) => {
@@ -101,9 +100,8 @@ export function ImportDialog({
       setMessage("正在保存，完成后再关闭。");
       return;
     }
-    if (!force && dirty && !pendingCloseRef.current) {
-      pendingCloseRef.current = true;
-      setMessage("还有未保存的导入内容。再次点击关闭才会放弃这些内容。");
+    if (!force && dirty) {
+      setPendingDiscard("close");
       return;
     }
     reset();
@@ -115,11 +113,6 @@ export function ImportDialog({
       setFolderId(defaultFolderId ?? "");
     }
   }, [defaultFolderId, open]);
-
-  useEffect(() => {
-    pendingCloseRef.current = false;
-    pendingBatchDiscardRef.current = false;
-  }, [batchDrafts, content, filePath, folderId, mode, sourceUrl, tagText, title]);
 
   useEffect(() => {
     if (!open || !dialogRef.current) return;
@@ -149,7 +142,6 @@ export function ImportDialog({
   if (!open) return null;
 
   const handleModeChange = (nextMode: ImportMode) => {
-    pendingCloseRef.current = false;
     setMode(nextMode);
     setBatchDrafts([]);
     setMessage("");
@@ -261,26 +253,16 @@ export function ImportDialog({
   };
 
   const updateDraft = (id: string, patch: Partial<ImportDraft>) => {
-    pendingCloseRef.current = false;
     setBatchDrafts((current) => current.map((draft) => (draft.id === id ? { ...draft, ...patch } : draft)));
   };
 
   const removeDraft = (id: string) => {
-    pendingCloseRef.current = false;
-    pendingBatchDiscardRef.current = false;
     setBatchDrafts((current) => current.filter((draft) => draft.id !== id));
   };
 
   const discardBatchDrafts = () => {
     if (savingRef.current) return;
-    if (!pendingBatchDiscardRef.current) {
-      pendingBatchDiscardRef.current = true;
-      setMessage("批量导入草稿还没有保存。再次点击“返回单条导入”才会放弃这些草稿。");
-      return;
-    }
-    setBatchDrafts([]);
-    setMessage("");
-    pendingBatchDiscardRef.current = false;
+    setPendingDiscard("batch");
   };
 
   return (
@@ -289,7 +271,7 @@ export function ImportDialog({
         <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-lg font-semibold text-ink">导入资料</h2>
-            <p className="truncate text-sm text-ink/52">资料库保存长期资料与知识卡片；日常流水请写到日志。</p>
+            <p className="truncate text-sm text-ink/52">资料库保存长期资料与知识卡片；日常记录请写到日志。</p>
           </div>
           <button
             className="soft-button icon-action-standard"
@@ -335,7 +317,7 @@ export function ImportDialog({
           <div className="min-h-0 flex-1 overflow-hidden">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="text-sm font-semibold text-ink">批量导入回顾</p>
+                <p className="text-sm font-semibold text-ink">确认批量导入</p>
                 <p className="text-xs text-ink/52">确认标题、类型、目录、标签和阅读状态后再写入资料库。</p>
               </div>
               <button
@@ -526,6 +508,25 @@ export function ImportDialog({
           </button>
         </div>
       </div>
+      <ConfirmDialog
+        open={Boolean(pendingDiscard)}
+        title={pendingDiscard === "batch" ? "放弃批量导入草稿？" : "放弃未保存的导入内容？"}
+        message={pendingDiscard === "batch"
+          ? "返回单条导入后，当前批量导入草稿将被舍弃。"
+          : "关闭后，当前未保存的导入内容将被舍弃。"}
+        confirmLabel={pendingDiscard === "batch" ? "返回单条导入" : "放弃并关闭"}
+        danger
+        onCancel={() => setPendingDiscard(null)}
+        onConfirm={() => {
+          if (pendingDiscard === "batch") {
+            setBatchDrafts([]);
+            setMessage("");
+            setPendingDiscard(null);
+            return;
+          }
+          close(true);
+        }}
+      />
     </div>
   );
 }

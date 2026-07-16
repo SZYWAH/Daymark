@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   CodexReviewInput,
   CodexSessionDay,
@@ -237,35 +237,129 @@ export async function indexConversationSessions(
   return invoke<ConversationSessionIndex[]>("index_conversation_sessions", { options });
 }
 
-export async function readSelectedCodexSessions(sessionIds: string[], jobId?: string): Promise<CodexReviewInput> {
+export type ConversationSessionScanProgressEvent = {
+  stage: "discovering" | "candidates" | "verifying" | "background" | "completed";
+  candidateCount: number;
+  sessionIndex: number;
+  sessionCount: number;
+  processedBytes: number;
+  cacheHitCount: number;
+  matchedCount: number;
+  excludedCount: number;
+};
+
+export type ConversationSessionScanResult = {
+  sessions: ConversationSessionIndex[];
+  candidateCount: number;
+  excludedCount: number;
+  cacheHitCount: number;
+};
+
+export async function scanConversationSessionsExact(
+  options: ConversationSessionIndexOptions,
+  jobId: string,
+  onProgress?: (event: ConversationSessionScanProgressEvent) => void,
+): Promise<ConversationSessionScanResult> {
+  if (!isDesktopRuntime()) {
+    return { sessions: [], candidateCount: 0, excludedCount: 0, cacheHitCount: 0 };
+  }
+  const onEvent = new Channel<ConversationSessionScanProgressEvent>();
+  onEvent.onmessage = (event) => onProgress?.(event);
+  return invoke<ConversationSessionScanResult>("scan_conversation_sessions_exact", {
+    options,
+    jobId,
+    onEvent,
+  });
+}
+
+export async function completeConversationDateIndex(
+  options: ConversationSessionIndexOptions,
+  jobId: string,
+  onProgress?: (event: ConversationSessionScanProgressEvent) => void,
+) {
+  if (!isDesktopRuntime()) return;
+  const onEvent = new Channel<ConversationSessionScanProgressEvent>();
+  onEvent.onmessage = (event) => onProgress?.(event);
+  await invoke("complete_conversation_date_index", { options, jobId, onEvent });
+}
+
+export async function clearConversationDateIndex() {
+  if (!isDesktopRuntime()) return;
+  await invoke("clear_conversation_date_index");
+}
+
+export type ConversationSessionReadOptions = {
+  activityDateFrom?: string;
+  activityDateTo?: string;
+};
+
+export type ConversationReadProgressEvent = {
+  stage: "locating" | "reading" | "completed";
+  sessionIndex: number;
+  sessionCount: number;
+  processedBytes: number;
+  totalBytes: number;
+  messageCount: number;
+  extractedChars: number;
+};
+
+export async function readSelectedCodexSessions(
+  sessionIds: string[],
+  jobId?: string,
+  options?: ConversationSessionReadOptions,
+  onProgress?: (event: ConversationReadProgressEvent) => void,
+): Promise<CodexReviewInput> {
   if (!isDesktopRuntime()) {
     throw new Error("Codex 回顾需要在桌面端使用。");
   }
 
-  return invoke<CodexReviewInput>("read_selected_codex_sessions", { sessionIds, jobId });
+  const onEvent = new Channel<ConversationReadProgressEvent>();
+  onEvent.onmessage = (event) => onProgress?.(event);
+  return invoke<CodexReviewInput>("read_selected_codex_sessions", {
+    sessionIds,
+    jobId,
+    options,
+    onEvent,
+  });
 }
 
 export async function readSelectedConversationSessions(
   sessionIds: string[],
   jobId?: string,
+  options?: ConversationSessionReadOptions,
+  onProgress?: (event: ConversationReadProgressEvent) => void,
 ): Promise<ConversationReviewInput> {
   if (!isDesktopRuntime()) {
     throw new Error("AI 对话回顾需要在桌面端使用。");
   }
 
-  return invoke<ConversationReviewInput>("read_selected_conversation_sessions", { sessionIds, jobId });
+  const onEvent = new Channel<ConversationReadProgressEvent>();
+  onEvent.onmessage = (event) => onProgress?.(event);
+  return invoke<ConversationReviewInput>("read_selected_conversation_sessions", {
+    sessionIds,
+    jobId,
+    options,
+    onEvent,
+  });
 }
 
 export async function readConversationSessionDeltas(
   sessionIds: string[],
   cursors: ConversationSessionDeltaCursorInput[],
   jobId?: string,
+  options?: ConversationSessionReadOptions,
 ): Promise<ConversationSessionDelta[]> {
   if (!isDesktopRuntime()) {
     throw new Error("自动工作回顾需要在桌面端使用。");
   }
 
-  return invoke<ConversationSessionDelta[]>("read_conversation_session_deltas", { sessionIds, cursors, jobId });
+  return invoke<ConversationSessionDelta[]>("read_conversation_session_deltas", {
+    sessionIds,
+    cursors,
+    jobId,
+    activityDateFrom: options?.activityDateFrom,
+    activityDateTo: options?.activityDateTo,
+  });
 }
 
 export async function cancelCodexReviewJob(jobId: string) {

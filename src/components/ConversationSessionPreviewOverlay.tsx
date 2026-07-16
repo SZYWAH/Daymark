@@ -14,11 +14,15 @@ function createClientJobId() {
 export function ConversationSessionPreviewOverlay({
   sessions,
   selectedIds,
+  lockedSourceKind,
+  selectionDisabled = false,
   onToggleSession,
   onClose,
 }: {
   sessions: CodexSessionIndex[];
   selectedIds: Set<string>;
+  lockedSourceKind?: ConversationSourceKind;
+  selectionDisabled?: boolean;
   onToggleSession: (id: string) => void;
   onClose: () => void;
 }) {
@@ -35,7 +39,12 @@ export function ConversationSessionPreviewOverlay({
     const normalized = keyword.trim().toLowerCase();
     return sessions.filter((session) => {
       if (sourceFilter !== "all" && session.sourceKind !== sourceFilter) return false;
-      if (dateQuery && !session.date.includes(dateQuery)) return false;
+      if (
+        dateQuery &&
+        ![session.date, session.startedDate, session.lastActiveDate]
+          .filter(Boolean)
+          .some((date) => date?.includes(dateQuery))
+      ) return false;
       if (!normalized) return true;
       return [session.title, session.preview, session.path, session.cwd, session.sourceLabel]
         .filter(Boolean)
@@ -57,7 +66,7 @@ export function ConversationSessionPreviewOverlay({
       if (previewRequestSeqRef.current !== requestSeq) return;
       setPreviewText(input.transcriptChunks.join("\n\n"));
       setPreviewMeta(
-        `${session.sourceLabel} · ${session.date} · ${input.totalChars.toLocaleString("zh-CN")} 字符${
+        `${session.sourceLabel} · 最后活动 ${session.lastActiveDate ?? session.date} · ${input.totalChars.toLocaleString("zh-CN")} 字符${
           input.redacted ? " · 已脱敏" : ""
         }${input.truncated ? " · 已截断" : ""}`,
       );
@@ -120,6 +129,7 @@ export function ConversationSessionPreviewOverlay({
         >
           {filtered.map((session) => {
             const selected = selectedIds.has(session.id);
+            const sourceLocked = Boolean(lockedSourceKind && session.sourceKind !== lockedSourceKind);
             return (
               <ResultRow key={`${session.id}-${session.path}`} selected={selected}>
                 <div className="mb-2 flex items-start justify-between gap-2">
@@ -130,13 +140,23 @@ export function ConversationSessionPreviewOverlay({
                     </div>
                     <p className="ui-text-meta mt-1 truncate text-anywhere text-xs">{session.path}</p>
                   </div>
-                  <span className="ui-text-meta shrink-0 text-[11px]">{session.date}</span>
+                  <span className="ui-text-meta shrink-0 text-right text-[11px]">
+                    <span className="block">最后活动 {session.lastActiveDate ?? session.date}</span>
+                    {(session.startedDate ?? session.date) !== (session.lastActiveDate ?? session.date) && (
+                      <span className="block">开始于 {session.startedDate ?? session.date}</span>
+                    )}
+                  </span>
                 </div>
                 <BoundedPreview maxLinesClass="line-clamp-2" className="text-xs leading-5 text-ink/54">
                   {session.preview}
                 </BoundedPreview>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <button className="soft-button action-micro" onClick={() => onToggleSession(session.id)}>
+                  <button
+                    className="soft-button action-micro"
+                    disabled={selectionDisabled || sourceLocked}
+                    onClick={() => onToggleSession(session.id)}
+                    title={sourceLocked ? "本次生成已选择另一来源" : undefined}
+                  >
                     {selected ? "取消勾选" : "勾选"}
                   </button>
                   <button className="soft-button action-micro" disabled={previewingId === session.id} onClick={() => void openPreview(session)}>

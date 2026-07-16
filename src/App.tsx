@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { animate } from "animejs";
 import { listen } from "@tauri-apps/api/event";
-import { PanelLeftOpen } from "lucide-react";
+import { ChevronRight, PanelLeftOpen } from "lucide-react";
 import {
   extractMemoryCandidates,
   generateLibraryCardFromJournal,
@@ -14,6 +14,8 @@ import {
   summarizeJournalPeriod,
   type AiActionResult,
   type CodexReviewProgress,
+  type MemorySuggestionTaskHooks,
+  type ReviewGenerationTaskHooks,
 } from "./ai/deepseek";
 import { EditorOverlay } from "./components/EditorOverlay";
 import { ExtractDialog, type ExtractDraft } from "./components/ExtractDialog";
@@ -31,6 +33,11 @@ import { MobileGlobalNav, Sidebar } from "./components/Sidebar";
 import { MainWindowTitleBar } from "./components/MainWindowTitleBar";
 import { StartupScreen } from "./components/StartupScreen";
 import { TodayPage } from "./components/TodayPage";
+import {
+  ReviewGenerationWorkspace,
+  type ReviewGenerationRuntime,
+} from "./components/ReviewGenerationWorkspace";
+import { ConversationScanWorkspace } from "./components/ConversationScanWorkspace";
 import {
   createKnowledgeLink,
   createFolder,
@@ -72,6 +79,7 @@ import {
   type DaymarkCoreBackupCounts,
   type DaymarkCoreBackupV1,
   updateCodexDailyReview,
+  updateConversationGenerationDraft,
   updateDailyReviewReplacementDraft,
   updateFolder,
   updateItem,
@@ -82,6 +90,8 @@ import {
   upsertConversationGenerationDraft,
   upsertDailyConversationReview,
   upsertSummaryReport,
+  deleteConversationGenerationDraft,
+  removeExpiredConversationGenerationDrafts,
 } from "./data/itemStore";
 import { loadAiSettingsWithSecrets, saveAiSettingsWithSecrets } from "./lib/aiSecrets";
 import { runAutoWorkReviewOnce } from "./lib/autoWorkReview";
@@ -91,6 +101,40 @@ import { useMainWindowMaximized } from "./hooks/useMainWindowMaximized";
 import { getSafeErrorMessage } from "./lib/redaction";
 import { markOnboardingCompleted, shouldShowOnboarding } from "./lib/onboarding";
 import { shouldOpenFirstRunGuide } from "./lib/startup";
+import {
+  markConversationDateIndexUserScanCompleted,
+  pauseConversationDateIndexCompletion,
+  startConversationDateIndexCompletion,
+} from "./lib/conversationDateIndex";
+import { formatConversationScanProgress } from "./lib/conversationScanProgress";
+import {
+  createConversationScanJobId,
+  createConversationScanKey,
+  DEFAULT_CONVERSATION_SCAN_QUERY,
+  isConversationScanActive,
+  normalizeConversationScanQuery,
+  shouldShowConversationScanEntry,
+  toConversationScanOptions,
+  type ConversationScanQuery,
+  type ConversationScanRuntime,
+} from "./lib/conversationScanTask";
+import {
+  createMemoryContentVersion,
+  createMemorySuggestionCheckpoint,
+  createReviewContentVersion,
+  isMemorySuggestionCheckpointCurrent,
+  updateMemorySuggestionCheckpoint,
+} from "./lib/memorySuggestion";
+import { formatReviewGenerationResult } from "./lib/reviewGenerationResult";
+import { toConversationReadProgressView } from "./lib/conversationReadProgress";
+import {
+  createInitialReviewCheckpoint,
+  createReviewSettingsFingerprint,
+  createReviewTaskFingerprint,
+  getReviewCheckpointExpiry,
+  shouldShowReviewGenerationEntry,
+} from "./lib/reviewGenerationTask";
+import { resolveCollapsedConversationTaskEntry } from "./lib/conversationReviewWorkbench";
 import {
   DEMO_LIBRARY_ROOT_ID,
   getDemoLibraryState,
@@ -103,9 +147,12 @@ import { ATTENTION_READING_STATUSES, getAttentionPriority, isAttentionItem } fro
 import {
   extractLocalFileText,
   extractLocalImageData,
+  cancelConversationReviewJob,
   getQuickCaptureRuntimeState,
   getSupportedVisionTypes,
   isDesktopRuntime,
+  readSelectedConversationSessions,
+  scanConversationSessionsExact,
 } from "./lib/desktop";
 import type {
   ActiveView,
@@ -119,6 +166,7 @@ import type {
   CodexReviewInput,
   CodexSessionIndex,
   ConversationGenerationDraft,
+  ConversationReviewGenerationRequest,
   ConversationSessionIndex,
   DailyConversationReview,
   DailyReviewReplacementDraft,
@@ -132,11 +180,15 @@ import type {
   MemoryCard,
   MemoryDocument,
   MemoryPatchDraft,
+  MemorySuggestionGenerationResult,
+  MemorySuggestionCheckpointV1,
   MemorySubView,
   ProcessStatus,
   ReadingStatus,
   ResizableLayoutState,
   RollingWorkReview,
+  ReviewMemorySuggestionSource,
+  ReviewGenerationTaskCheckpointV1,
   SearchResult,
   SmartView,
   SummaryReport,
@@ -146,6 +198,7 @@ import { PROCESS_STATUSES, READING_STATUSES } from "./types";
 
 type StatusFilter = ProcessStatus | "all";
 type ListView = { kind: "smart"; id: SmartView } | { kind: "folder"; folderId: string };
+type ForegroundWorkspace = "scan" | "review" | null;
 type SummaryPrompt = {
   id: string;
   periodType: "day" | "week" | "month";
@@ -153,6 +206,14 @@ type SummaryPrompt = {
   periodEnd: string;
   label: string;
 };
+
+async function updateReviewTaskCheckpoint(
+  hooks: ReviewGenerationTaskHooks | undefined,
+  patch: Partial<ReviewGenerationTaskCheckpointV1>,
+) {
+  if (!hooks) return;
+  await hooks.onCheckpoint({ ...hooks.checkpoint, ...patch });
+}
 
 type MemoryDocumentSaveOptions = {
   baselineContent: string;
@@ -461,6 +522,24 @@ function countCharacters(value: string) {
   return Array.from(value).length;
 }
 
+function createReviewGenerationJobId() {
+  if ("randomUUID" in crypto) return crypto.randomUUID();
+  return `review-generation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function formatReviewGenerationStageMessage(checkpoint: ReviewGenerationTaskCheckpointV1) {
+  if (checkpoint.stage === "reading") return "正在读取所选会话。";
+  if (checkpoint.stage === "summarizing") {
+    return `正在整理分段 ${checkpoint.completedChunkCount}/${checkpoint.chunkCount}。`;
+  }
+  if (checkpoint.stage === "compacting") {
+    return `正在压缩第 ${checkpoint.compactionLevel} 层摘要。`;
+  }
+  if (checkpoint.stage === "synthesizing") return "正在合成回顾。";
+  if (checkpoint.stage === "memory-suggestion") return "正在分析长期记忆建议。";
+  return "回顾已生成。";
+}
+
 function formatCoreBackupCounts(counts: DaymarkCoreBackupCounts) {
   return [
     `${counts.items} 条资料`,
@@ -559,6 +638,11 @@ export default function App() {
   const [codexSessionIndex, setCodexSessionIndex] = useState<CodexSessionIndex[]>([]);
   const [dailyReviewDrafts, setDailyReviewDrafts] = useState<DailyReviewReplacementDraft[]>([]);
   const [conversationGenerationDrafts, setConversationGenerationDrafts] = useState<ConversationGenerationDraft[]>([]);
+  const [reviewGenerationTask, setReviewGenerationTask] = useState<ReviewGenerationRuntime | null>(null);
+  const [conversationScanQuery, setConversationScanQuery] = useState<ConversationScanQuery>(DEFAULT_CONVERSATION_SCAN_QUERY);
+  const [conversationScanTask, setConversationScanTask] = useState<ConversationScanRuntime | null>(null);
+  const [lastCompletedConversationScanKey, setLastCompletedConversationScanKey] = useState("");
+  const [foregroundWorkspace, setForegroundWorkspace] = useState<ForegroundWorkspace>(null);
   const [links, setLinks] = useState<KnowledgeLink[]>([]);
   const [todayDashboard, setTodayDashboard] = useState<TodayDashboardData | null>(null);
   const [settings, setSettings] = useState<AiSettings | null>(null);
@@ -615,6 +699,12 @@ export default function App() {
   const extractAbortRef = useRef<AbortController | null>(null);
   const aiActionAbortRef = useRef<AbortController | null>(null);
   const reviewGenerationRunningRef = useRef(new Set<string>());
+  const reviewGenerationTaskRef = useRef<ReviewGenerationRuntime | null>(null);
+  const reviewGenerationAbortRef = useRef<AbortController | null>(null);
+  const reviewGenerationJobIdRef = useRef("");
+  const reviewGenerationRunRef = useRef(0);
+  const reviewDraftRecoveryDoneRef = useRef(false);
+  const conversationScanTaskRef = useRef<ConversationScanRuntime | null>(null);
   const autoWorkReviewRunningRef = useRef(false);
   const settingsRef = useRef<AiSettings | null>(null);
   const settingsPanelRef = useRef<SettingsPanelHandle | null>(null);
@@ -635,6 +725,94 @@ export default function App() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  useEffect(() => {
+    if (loading) return;
+    startConversationDateIndexCompletion();
+    return () => {
+      void pauseConversationDateIndexCompletion();
+    };
+  }, [loading]);
+
+  useEffect(() => {
+    reviewGenerationTaskRef.current = reviewGenerationTask;
+  }, [reviewGenerationTask]);
+
+  useEffect(() => {
+    conversationScanTaskRef.current = conversationScanTask;
+  }, [conversationScanTask]);
+
+  const reviewGenerationWorkspaceOpen = foregroundWorkspace === "review";
+  const conversationScanWorkspaceOpen = foregroundWorkspace === "scan";
+  const openReviewGenerationWorkspace = () => setForegroundWorkspace("review");
+  const closeReviewGenerationWorkspace = () => setForegroundWorkspace((current) => current === "review" ? null : current);
+  const openConversationScanWorkspace = () => setForegroundWorkspace("scan");
+  const closeConversationScanWorkspace = () => setForegroundWorkspace((current) => current === "scan" ? null : current);
+  const collapsedConversationTaskEntry = resolveCollapsedConversationTaskEntry({
+    reviewEntryVisible: shouldShowReviewGenerationEntry(
+      activeView,
+      Boolean(reviewGenerationTask),
+      reviewGenerationWorkspaceOpen,
+    ),
+    reviewRunning: reviewGenerationTask?.status === "running",
+    scanEntryVisible: shouldShowConversationScanEntry(
+      activeView,
+      conversationScanTask,
+      conversationScanWorkspaceOpen,
+    ),
+  });
+
+  useEffect(() => {
+    if (loading || reviewDraftRecoveryDoneRef.current) return;
+    reviewDraftRecoveryDoneRef.current = true;
+    void (async () => {
+      await removeExpiredConversationGenerationDrafts();
+      const drafts = await getConversationGenerationDrafts();
+      const normalized = await Promise.all(drafts.map(async (draft) => {
+        if (draft.status !== "running") return draft;
+        return updateConversationGenerationDraft(draft.id, {
+          status: "paused",
+          message: "Daymark 上次退出时任务尚未完成，可从检查点继续。",
+          expiresAt: getReviewCheckpointExpiry(),
+        });
+      }));
+      setConversationGenerationDrafts(normalized);
+      const resumable = normalized.find((draft) => draft.checkpoint && (
+        draft.status !== "completed"
+        || draft.checkpoint.memorySuggestion?.status === "failed"
+        || draft.checkpoint.memorySuggestion?.status === "cancelled"
+      ));
+      if (resumable?.checkpoint && !reviewGenerationTaskRef.current) {
+        const request: ConversationReviewGenerationRequest = {
+          reviewKey: resumable.reviewKey || `${resumable.date ?? "selected"}:${resumable.reviewKind}:${resumable.sourceKind ?? "mixed"}`,
+          date: resumable.date || resumable.checkpoint.activityDateTo || resumable.checkpoint.activityDateFrom || toDateKey(new Date()),
+          reviewKind: resumable.reviewKind,
+          sourceKind: resumable.sourceKind,
+          sourceLabel: resumable.sourceLabel,
+          selectedSessionIds: resumable.selectedSessionIds,
+          activityDateFrom: resumable.checkpoint.activityDateFrom,
+          activityDateTo: resumable.checkpoint.activityDateTo,
+        };
+        const runtime: ReviewGenerationRuntime = {
+          draftId: resumable.id,
+          request,
+          status: resumable.status === "running" ? "paused" : resumable.status,
+          checkpoint: resumable.checkpoint,
+          message: resumable.message,
+          startedAt: resumable.checkpoint.startedAt,
+          sessionCount: request.selectedSessionIds.length,
+          messageCount: resumable.checkpoint.messageCount ?? 0,
+          extractedChars: resumable.checkpoint.totalChars,
+          retryCount: resumable.checkpoint.retryCount,
+          resultReviewId: resumable.checkpoint.persistedReviewId,
+          resultReviewDraftId: resumable.checkpoint.persistedReviewDraftId,
+        };
+        reviewGenerationTaskRef.current = runtime;
+        setReviewGenerationTask(runtime);
+        openReviewGenerationWorkspace();
+      }
+    })().catch(() => undefined);
+  }, [loading]);
 
   useEffect(() => {
     autoWorkReviewSettingsRef.current = autoWorkReviewSettings;
@@ -1201,7 +1379,7 @@ export default function App() {
 
   const blockUnsavedWorkNavigation = () => {
     if (editorDirty) {
-      setError("资料编辑还没有保存。请先保存，或在编辑弹窗里再次关闭以放弃修改。");
+      setError("资料编辑还没有保存。请先保存，或在编辑弹窗中选择放弃修改。");
       return true;
     }
     return false;
@@ -1209,7 +1387,7 @@ export default function App() {
 
   const blockUnsavedEditorNavigation = () => {
     if (!editorDirty) return false;
-    setError("资料编辑还没有保存。请先保存，或在编辑弹窗里再次关闭以放弃修改。");
+    setError("资料编辑还没有保存。请先保存，或在编辑弹窗中选择放弃修改。");
     return true;
   };
 
@@ -1271,6 +1449,7 @@ export default function App() {
     if (action === "import") {
       const navigated = handleSelectView({ kind: "smart", id: "attention" });
       if (navigated) {
+        void pauseConversationDateIndexCompletion();
         setImportOpen(true);
       }
       return navigated;
@@ -1329,6 +1508,7 @@ export default function App() {
   };
 
   const handleCreateItem = () => {
+    void pauseConversationDateIndexCompletion();
     setImportOpen(true);
   };
 
@@ -1650,7 +1830,7 @@ export default function App() {
             : "待办";
       setPendingConfirm({
         title: `AI ${getAiActionLabel(action)}`,
-        message: `${sourceText}。确认后才会调用 AI，结果会写入这条资料的「${changedFields}」字段，并保留本次提取/发送回执。`,
+        message: `${sourceText}。确认后才会调用 AI，结果会写入这条资料的「${changedFields}」字段，并显示处理记录。`,
         confirmLabel: "确认发送",
         closeBeforeRun: true,
         onConfirm: () => handleRunAiAction(action, true, aiTargetItem),
@@ -1857,7 +2037,7 @@ export default function App() {
       setExtractMessage(
         extractError instanceof Error
           ? `${extractError.message} 已先生成本地草稿，你可以手动调整后保存。`
-          : "AI 沉淀失败，已先生成本地草稿。",
+          : "知识卡片生成失败，已保留本地草稿。",
       );
     } finally {
       if (extractRequestSeqRef.current === requestSeq) {
@@ -1879,7 +2059,7 @@ export default function App() {
 
   const handleExtractToLibrary = async (entry: JournalEntry) => {
     if (extractLoading) {
-      setError("正在整理上一条日志，请稍等完成后再开始新的沉淀。");
+      setError("正在整理上一条日志，请等待完成后再开始新的知识卡片。");
       return;
     }
     if (!settings || !aiConfigured) {
@@ -1921,7 +2101,7 @@ export default function App() {
           setExtractDraft(null);
           setExtractSourceId("");
           setActiveView({ kind: "item", itemId: existingItem.id });
-          setError("这条日志已经沉淀过，已为你打开原知识卡片。");
+          setError("这条日志已提炼为知识卡片，已打开原卡片。");
           return;
         }
       }
@@ -1934,7 +2114,7 @@ export default function App() {
         readingStatus: READING_NOT_NEEDED,
         tags: extractDraft.tags.length > 0 ? extractDraft.tags : ["知识卡片"],
         content: extractDraft.content,
-        aiSummary: extractDraft.aiSummary || "从日志沉淀的知识卡片。",
+        aiSummary: extractDraft.aiSummary || "从日志提炼的知识卡片。",
       };
 
       const created = extractSourceId
@@ -2056,10 +2236,140 @@ export default function App() {
     await refreshJournalData();
   };
 
+  const generateMemorySuggestionForReview = async (
+    review: CodexDailyReview,
+    source: { sourceReviewId?: string; sourceReviewDraftId?: string },
+    onProgress?: (progress: CodexReviewProgress) => void,
+    signal?: AbortSignal,
+    reviewTaskHooks?: ReviewGenerationTaskHooks,
+  ): Promise<MemorySuggestionGenerationResult> => {
+    if (!settings || !aiConfigured) {
+      return { status: "failed", error: "还没有配置 AI API Key。" };
+    }
+
+    const currentMemory = memoryDocument ?? (await getMemoryDocument());
+    const sourceContentVersion = createReviewContentVersion(review.title, review.content);
+    const memoryContentVersion = createMemoryContentVersion(currentMemory?.content ?? "");
+    const sourceRecord = source.sourceReviewDraftId
+      ? (await getDailyReviewReplacementDrafts()).find((item) => item.id === source.sourceReviewDraftId)
+      : (await getCodexDailyReviews()).find((item) => item.id === source.sourceReviewId);
+    const checkpointInput = {
+      ...source,
+      sourceContentVersion,
+      memoryContentVersion,
+    };
+    let checkpoint = isMemorySuggestionCheckpointCurrent(sourceRecord?.memorySuggestionCheckpoint, checkpointInput)
+      ? sourceRecord!.memorySuggestionCheckpoint!
+      : isMemorySuggestionCheckpointCurrent(reviewTaskHooks?.checkpoint.memorySuggestion, checkpointInput)
+        ? reviewTaskHooks!.checkpoint.memorySuggestion!
+        : createMemorySuggestionCheckpoint(checkpointInput);
+
+    const persistSuggestionCheckpoint = async (next: MemorySuggestionCheckpointV1) => {
+      checkpoint = next;
+      if (source.sourceReviewDraftId) {
+        await updateDailyReviewReplacementDraft(source.sourceReviewDraftId, {
+          memorySuggestionStatus: next.status,
+          memorySuggestionCheckpoint: next,
+        });
+      } else if (source.sourceReviewId) {
+        await updateCodexDailyReview(source.sourceReviewId, {
+          memorySuggestionStatus: next.status,
+          memorySuggestionCheckpoint: next,
+        });
+      }
+      await updateReviewTaskCheckpoint(reviewTaskHooks, {
+        memorySuggestion: next,
+        memorySuggestionStatus: next.status === "created" || next.status === "none" || next.status === "failed" || next.status === "cancelled"
+          ? next.status
+          : undefined,
+      });
+    };
+
+    if (checkpoint.status === "created" || checkpoint.status === "none") {
+      const patchDraft = checkpoint.patchDraftId
+        ? (await getMemoryPatchDrafts()).find((draft) => draft.id === checkpoint.patchDraftId)
+        : undefined;
+      return { status: checkpoint.status, patchDraft, checkpoint };
+    }
+
+    try {
+      onProgress?.({ stage: "分析长期记忆", message: "正在分析长期记忆建议。" });
+      const suggestionHooks: MemorySuggestionTaskHooks = {
+        get checkpoint() {
+          return checkpoint;
+        },
+        onCheckpoint: persistSuggestionCheckpoint,
+      };
+      const suggestion = await streamGenerateMemoryPatchFromReview(
+        review,
+        currentMemory?.content ?? "",
+        settings,
+        (progress) => onProgress?.(progress),
+        signal,
+        suggestionHooks,
+      );
+      if (signal?.aborted) throw new DOMException("已取消生成。", "AbortError");
+      if (!suggestion.shouldCreate) {
+        const existingDrafts = await getMemoryPatchDrafts();
+        const existingDraft = existingDrafts.find(
+          (draft) => draft.status === "pending" && (
+            source.sourceReviewDraftId
+              ? draft.sourceReviewDraftId === source.sourceReviewDraftId
+              : draft.sourceReviewId === source.sourceReviewId
+          ),
+        );
+        if (existingDraft) {
+          await updateMemoryPatchDraft(existingDraft.id, { status: "ignored" });
+        }
+        const completed = updateMemorySuggestionCheckpoint(checkpoint, {
+          status: "none",
+          lastError: undefined,
+          patchDraftId: undefined,
+        });
+        await persistSuggestionCheckpoint(completed);
+        onProgress?.({ stage: "分析长期记忆", message: "本次未发现需要长期保留的新信息。" });
+        return { status: "none", checkpoint: completed };
+      }
+
+      const patchDraft = await createMemoryPatchDraft({
+        title: suggestion.title,
+        rationale: suggestion.rationale,
+        proposedContent: suggestion.proposedContent,
+        sourceReviewId: source.sourceReviewId,
+        sourceReviewDraftId: source.sourceReviewDraftId,
+        sourceReviewContentVersion: createReviewContentVersion(review.title, review.content),
+        status: "pending",
+      });
+      const completed = updateMemorySuggestionCheckpoint(checkpoint, {
+        status: "created",
+        lastError: undefined,
+        patchDraftId: patchDraft.id,
+      });
+      await persistSuggestionCheckpoint(completed);
+      return { status: "created", patchDraft, checkpoint: completed };
+    } catch (error) {
+      const cancelled = signal?.aborted || (error instanceof DOMException && error.name === "AbortError");
+      const safeError = getSafeErrorMessage(error, cancelled ? "长期记忆建议生成已取消。" : "长期记忆建议未生成。");
+      const failed = updateMemorySuggestionCheckpoint(checkpoint, {
+        status: cancelled ? "cancelled" : "failed",
+        lastError: safeError,
+      });
+      await persistSuggestionCheckpoint(failed).catch(() => undefined);
+      onProgress?.({
+        stage: "分析长期记忆",
+        message: cancelled
+          ? "长期记忆建议生成已取消，可稍后重试。"
+          : "长期记忆建议未生成，可稍后重试。",
+      });
+      return { status: cancelled ? "cancelled" : "failed", checkpoint: failed, error: safeError };
+    }
+  };
+
   const handleGenerateCodexReview = async (
     input: CodexReviewInput,
     onProgress?: (progress: CodexReviewProgress) => void,
     signal?: AbortSignal,
+    taskHooks?: ReviewGenerationTaskHooks,
   ) => {
     if (!settings || !aiConfigured) {
       throw new Error("还没有配置 AI API Key。");
@@ -2074,9 +2384,15 @@ export default function App() {
     try {
     onProgress?.({
       stage: "读取会话",
-      message: `准备读取 ${input.sessions.length} 个会话，共 ${input.totalChars.toLocaleString("zh-CN")} 字符。`,
+      message: input.activityDateWarning || `准备读取 ${input.sessions.length} 个会话，共 ${input.totalChars.toLocaleString("zh-CN")} 字符。`,
     });
-    const summary = await streamSummarizeConversationReview(input, settings, (progress) => onProgress?.(progress), signal);
+    const summary = await streamSummarizeConversationReview(
+      input,
+      settings,
+      (progress) => onProgress?.(progress),
+      signal,
+      taskHooks,
+    );
     if (signal?.aborted) throw new DOMException("已取消生成。", "AbortError");
 
     const sourceKind = input.sourceKinds.length === 1 ? input.sourceKinds[0] : undefined;
@@ -2097,6 +2413,8 @@ export default function App() {
       content: summary.content,
       sessionCount: input.sessions.length,
       sessionIds: input.sessions.map((session) => session.id),
+      activityDateFrom: input.activityDateFrom,
+      activityDateTo: input.activityDateTo,
       sourceReviewIds: [],
       createdAt: formatTimestamp(),
       updatedAt: formatTimestamp(),
@@ -2105,8 +2423,24 @@ export default function App() {
     const existingReview = await getDailyConversationReviewByKey(reviewDraft.reviewKey);
     let review: CodexDailyReview;
     let storedAsReplacementDraft = false;
-    if (existingReview) {
-      await createDailyReviewReplacementDraft({
+    let replacementDraftRecord: DailyReviewReplacementDraft | undefined;
+    const persistedReplacementDraft = taskHooks?.checkpoint.persistedReviewDraftId
+      ? (await getDailyReviewReplacementDrafts()).find(
+        (draft) => draft.id === taskHooks.checkpoint.persistedReviewDraftId,
+      )
+      : undefined;
+    const persistedReview = taskHooks?.checkpoint.persistedReviewId === existingReview?.id
+      ? existingReview
+      : undefined;
+
+    if (persistedReplacementDraft && existingReview) {
+      replacementDraftRecord = persistedReplacementDraft;
+      review = existingReview;
+      storedAsReplacementDraft = true;
+    } else if (persistedReview) {
+      review = persistedReview;
+    } else if (existingReview) {
+      replacementDraftRecord = await createDailyReviewReplacementDraft({
         reviewKey: reviewDraft.reviewKey,
         date: reviewDraft.date,
         reviewKind: reviewDraft.reviewKind,
@@ -2116,13 +2450,15 @@ export default function App() {
         content: reviewDraft.content,
         sessionCount: reviewDraft.sessionCount,
         sessionIds: reviewDraft.sessionIds ?? [],
+        activityDateFrom: reviewDraft.activityDateFrom,
+        activityDateTo: reviewDraft.activityDateTo,
         sourceReviewIds: [],
         status: "pending",
         targetReviewId: existingReview.id,
       });
       review = existingReview;
       storedAsReplacementDraft = true;
-      onProgress?.({ stage: "提出记忆修改建议", message: "已存在同日回顾，新版本已保存为替换草稿，等待你审核后再覆盖。" });
+      onProgress?.({ stage: "整理长期记忆建议", message: "已存在同日回顾，新版本等待确认替换。" });
     } else {
       review = await upsertDailyConversationReview({
         reviewKey: reviewDraft.reviewKey,
@@ -2134,47 +2470,45 @@ export default function App() {
         content: reviewDraft.content,
         sessionCount: reviewDraft.sessionCount,
         sessionIds: reviewDraft.sessionIds ?? [],
+        activityDateFrom: reviewDraft.activityDateFrom,
+        activityDateTo: reviewDraft.activityDateTo,
         sourceReviewIds: [],
       });
     }
 
-    let patchDraft: MemoryPatchDraft | undefined;
-    if (storedAsReplacementDraft) {
-      onProgress?.({ stage: "提出记忆修改建议", message: "替换草稿不会自动生成长期记忆建议，请先在回顾档案中审核替换。" });
-    } else {
-      try {
-      onProgress?.({ stage: "提出记忆修改建议", message: "正在根据回顾生成待审核的记忆修改建议。" });
-      const currentMemory = memoryDocument ?? (await getMemoryDocument());
-      const suggestion = await streamGenerateMemoryPatchFromReview(
-        reviewDraft,
-        currentMemory?.content ?? "",
-        settings,
-        (progress) => onProgress?.(progress),
-        signal,
-      );
-      if (signal?.aborted) throw new DOMException("已取消生成。", "AbortError");
+    await updateReviewTaskCheckpoint(taskHooks, {
+      stage: "memory-suggestion",
+      persistedReviewId: storedAsReplacementDraft ? undefined : review.id,
+      persistedReviewDraftId: replacementDraftRecord?.id,
+      finalTitle: reviewDraft.title,
+      finalContent: reviewDraft.content,
+      lastError: undefined,
+    });
 
-      patchDraft = await createMemoryPatchDraft({
-        title: suggestion.title,
-        rationale: suggestion.rationale,
-        proposedContent: suggestion.proposedContent,
-        sourceReviewId: review.id,
-        status: "pending",
-      });
-    } catch (patchError) {
-      if (patchError instanceof DOMException && patchError.name === "AbortError") {
-        onProgress?.({ stage: "提出记忆修改建议", message: "回顾已保存，记忆建议生成已取消。" });
-      } else {
-        onProgress?.({
-          stage: "提出记忆修改建议",
-          message: `回顾已保存，但记忆建议生成失败：${patchError instanceof Error ? patchError.message : "未知错误"}`,
-        });
-      }
-    }
-    }
+    const memorySuggestion = await generateMemorySuggestionForReview(
+      reviewDraft,
+      replacementDraftRecord
+        ? { sourceReviewDraftId: replacementDraftRecord.id }
+        : { sourceReviewId: review.id },
+      onProgress,
+      signal,
+      taskHooks,
+    );
+    await updateReviewTaskCheckpoint(taskHooks, {
+      stage: "completed",
+      memorySuggestionStatus: memorySuggestion.status,
+      memorySuggestion: memorySuggestion.checkpoint,
+      lastError: memorySuggestion.error,
+    });
 
     await refreshMemoryData();
-    return { review, patchDraft, replacementDraft: storedAsReplacementDraft };
+    return {
+      review,
+      patchDraft: memorySuggestion.patchDraft,
+      replacementDraft: storedAsReplacementDraft,
+      replacementDraftId: replacementDraftRecord?.id,
+      memorySuggestionStatus: memorySuggestion.status,
+    };
     } finally {
       reviewGenerationRunningRef.current.delete(generationKey);
     }
@@ -2183,6 +2517,120 @@ export default function App() {
   const handleReplaceCodexSessionIndex = async (records: CodexSessionIndex[]) => {
     const saved = await replaceConversationSessionIndex(records);
     setCodexSessionIndex(saved);
+  };
+
+  const updateConversationScanTask = (
+    updater: (current: ConversationScanRuntime | null) => ConversationScanRuntime | null,
+  ) => {
+    setConversationScanTask((current) => {
+      const next = updater(current);
+      conversationScanTaskRef.current = next;
+      return next;
+    });
+  };
+
+  const handleStartConversationScan = async (requestedQuery: ConversationScanQuery) => {
+    if (!isDesktopRuntime()) return;
+    if (reviewGenerationTaskRef.current?.status === "running") {
+      openReviewGenerationWorkspace();
+      return;
+    }
+    if (isConversationScanActive(conversationScanTaskRef.current)) {
+      openConversationScanWorkspace();
+      return;
+    }
+
+    const query = normalizeConversationScanQuery(requestedQuery);
+    const scanKey = createConversationScanKey(query);
+    const options = toConversationScanOptions(query);
+    const jobId = createConversationScanJobId();
+    const runtime: ConversationScanRuntime = {
+      jobId,
+      status: "running",
+      query,
+      scanKey,
+      startedAt: new Date().toISOString(),
+      message: "正在准备本地会话扫描。",
+    };
+
+    setConversationScanQuery(query);
+    conversationScanTaskRef.current = runtime;
+    setConversationScanTask(runtime);
+    openConversationScanWorkspace();
+    await pauseConversationDateIndexCompletion();
+
+    try {
+      const result = await scanConversationSessionsExact(options, jobId, (progress) => {
+        updateConversationScanTask((current) => current?.jobId === jobId
+          ? {
+              ...current,
+              progress,
+              message: formatConversationScanProgress(progress, query.dateFrom || query.dateTo ? "活动日期" : "会话"),
+            }
+          : current);
+      });
+      if (conversationScanTaskRef.current?.jobId !== jobId) return;
+      await handleReplaceCodexSessionIndex(result.sessions);
+      setLastCompletedConversationScanKey(scanKey);
+      markConversationDateIndexUserScanCompleted();
+      updateConversationScanTask((current) => current?.jobId === jobId
+        ? {
+            ...current,
+            status: "completed",
+            result,
+            message: query.dateFrom || query.dateTo
+              ? `找到 ${result.sessions.length} 个所选日期内有消息的会话，排除 ${result.excludedCount} 个候选。`
+              : result.sessions.length > 0
+                ? `找到 ${result.sessions.length} 个会话，可以返回结果页选择要生成回顾的会话。`
+                : "没有找到符合当前条件的会话。",
+          }
+        : current);
+    } catch (scanError) {
+      if (conversationScanTaskRef.current?.jobId !== jobId) return;
+      const safeMessage = getSafeErrorMessage(scanError, "扫描会话失败。");
+      const cancelled = safeMessage.toLowerCase().includes("cancelled")
+        || conversationScanTaskRef.current.status === "cancelling";
+      updateConversationScanTask((current) => current?.jobId === jobId
+        ? {
+            ...current,
+            status: cancelled ? "cancelled" : "failed",
+            message: cancelled
+              ? "扫描已取消，上一次完整扫描结果已保留。"
+              : safeMessage,
+          }
+        : current);
+    } finally {
+      startConversationDateIndexCompletion({ sourceKinds: options.sourceKinds });
+    }
+  };
+
+  const handleCancelConversationScan = async () => {
+    const task = conversationScanTaskRef.current;
+    if (!task || task.status !== "running") return;
+    updateConversationScanTask((current) => current?.jobId === task.jobId
+      ? { ...current, status: "cancelling", message: "正在安全停止扫描，上一次完整结果会保留。" }
+      : current);
+    try {
+      await cancelConversationReviewJob(task.jobId);
+    } catch (cancelError) {
+      updateConversationScanTask((current) => current?.jobId === task.jobId
+        ? {
+            ...current,
+            status: "running",
+            message: `取消请求失败，扫描仍在继续。${getSafeErrorMessage(cancelError, "")}`,
+          }
+        : current);
+    }
+  };
+
+  const handleOpenConversationScanResults = () => {
+    closeConversationScanWorkspace();
+    setActiveView({ kind: "memory", subView: "ai-review" });
+  };
+
+  const handleRetryConversationScan = () => {
+    const query = conversationScanTaskRef.current?.query ?? conversationScanQuery;
+    void handleStartConversationScan(query);
   };
 
   const handleGenerateCombinedReview = async (
@@ -2225,8 +2673,9 @@ export default function App() {
     const existingReview = await getDailyConversationReviewByKey(reviewDraft.reviewKey);
     let review: CodexDailyReview;
     let storedAsReplacementDraft = false;
+    let replacementDraftRecord: DailyReviewReplacementDraft | undefined;
     if (existingReview) {
-      await createDailyReviewReplacementDraft({
+      replacementDraftRecord = await createDailyReviewReplacementDraft({
         reviewKey: reviewDraft.reviewKey,
         date: reviewDraft.date,
         reviewKind: reviewDraft.reviewKind,
@@ -2241,7 +2690,7 @@ export default function App() {
       });
       review = existingReview;
       storedAsReplacementDraft = true;
-      onProgress?.({ stage: "提出记忆修改建议", message: "已存在综合回顾，新版本已保存为替换草稿，等待你审核后再覆盖。" });
+      onProgress?.({ stage: "整理长期记忆建议", message: "已存在今日回顾，新版本等待确认替换。" });
     } else {
       review = await upsertDailyConversationReview({
         reviewKey: reviewDraft.reviewKey,
@@ -2256,56 +2705,648 @@ export default function App() {
       });
     }
 
-    let patchDraft: MemoryPatchDraft | undefined;
-    if (storedAsReplacementDraft) {
-      onProgress?.({ stage: "提出记忆修改建议", message: "替换草稿不会自动生成长期记忆建议，请先在回顾档案中审核替换。" });
-    } else {
-      try {
-      onProgress?.({ stage: "提出记忆修改建议", message: "正在根据综合回顾生成待审核的记忆修改建议。" });
-      const currentMemory = memoryDocument ?? (await getMemoryDocument());
-      const suggestion = await streamGenerateMemoryPatchFromReview(
-        reviewDraft,
-        currentMemory?.content ?? "",
-        settings,
-        (progress) => onProgress?.(progress),
-        signal,
-      );
-      if (signal?.aborted) throw new DOMException("已取消生成。", "AbortError");
-
-      patchDraft = await createMemoryPatchDraft({
-        title: suggestion.title,
-        rationale: suggestion.rationale,
-        proposedContent: suggestion.proposedContent,
-        sourceReviewId: review.id,
-        status: "pending",
-      });
-    } catch (patchError) {
-      if (patchError instanceof DOMException && patchError.name === "AbortError") {
-        onProgress?.({ stage: "提出记忆修改建议", message: "综合回顾已保存，记忆建议生成已取消。" });
-      } else {
-        onProgress?.({
-          stage: "提出记忆修改建议",
-          message: `综合回顾已保存，但记忆建议生成失败：${patchError instanceof Error ? patchError.message : "未知错误"}`,
-        });
-      }
-    }
-    }
+    const memorySuggestion = await generateMemorySuggestionForReview(
+      reviewDraft,
+      replacementDraftRecord
+        ? { sourceReviewDraftId: replacementDraftRecord.id }
+        : { sourceReviewId: review.id },
+      onProgress,
+      signal,
+    );
 
     await refreshMemoryData();
-    return { review, patchDraft, replacementDraft: storedAsReplacementDraft };
+    return {
+      review,
+      patchDraft: memorySuggestion.patchDraft,
+      replacementDraft: storedAsReplacementDraft,
+      memorySuggestionStatus: memorySuggestion.status,
+    };
     } finally {
       reviewGenerationRunningRef.current.delete(generationKey);
     }
   };
 
   const handleSaveGenerationDraft = async (draftInput: Omit<ConversationGenerationDraft, "id" | "createdAt" | "updatedAt">) => {
-    await upsertConversationGenerationDraft(draftInput);
-    await refreshMemoryData();
+    const saved = await upsertConversationGenerationDraft(draftInput);
+    setConversationGenerationDrafts((current) => [
+      saved,
+      ...current.filter((draft) => draft.id !== saved.id),
+    ]);
+    return saved;
+  };
+
+  const persistReviewGenerationDraft = async (
+    id: string,
+    patch: Partial<Omit<ConversationGenerationDraft, "id" | "createdAt" | "updatedAt">>,
+  ) => {
+    const saved = await updateConversationGenerationDraft(id, patch);
+    setConversationGenerationDrafts((current) => [
+      saved,
+      ...current.filter((draft) => draft.id !== saved.id),
+    ]);
+    return saved;
+  };
+
+  const runReviewGenerationTask = async (
+    draft: ConversationGenerationDraft,
+    request: ConversationReviewGenerationRequest,
+  ) => {
+    const currentSettings = settingsRef.current;
+    if (!currentSettings || getEffectiveAiSettings(currentSettings).keySource === "missing") {
+      const safeError = "当前连接未配置 API Key，请先在设置中完成配置。";
+      const failedCheckpoint: ReviewGenerationTaskCheckpointV1 = {
+        ...draft.checkpoint!,
+        lastError: safeError,
+      };
+      await persistReviewGenerationDraft(draft.id, {
+        status: "failed",
+        checkpoint: failedCheckpoint,
+        message: safeError,
+        expiresAt: getReviewCheckpointExpiry(),
+      });
+      setReviewGenerationTask((current) => current?.draftId === draft.id ? {
+        ...current,
+        status: "failed",
+        checkpoint: failedCheckpoint,
+        message: safeError,
+      } : current);
+      return;
+    }
+    const runId = reviewGenerationRunRef.current + 1;
+    reviewGenerationRunRef.current = runId;
+    reviewGenerationAbortRef.current?.abort();
+    if (reviewGenerationJobIdRef.current) {
+      void cancelConversationReviewJob(reviewGenerationJobIdRef.current);
+    }
+
+    const controller = new AbortController();
+    const jobId = createReviewGenerationJobId();
+    const checkpointRef = { current: draft.checkpoint! };
+    const messageCounts = new Map<number, number>();
+    reviewGenerationAbortRef.current = controller;
+    reviewGenerationJobIdRef.current = jobId;
+
+    const taskHooks: ReviewGenerationTaskHooks = {
+      get checkpoint() {
+        return checkpointRef.current;
+      },
+      onCheckpoint: async (nextCheckpoint) => {
+        checkpointRef.current = nextCheckpoint;
+        const stageMessage = formatReviewGenerationStageMessage(nextCheckpoint);
+        await persistReviewGenerationDraft(draft.id, {
+          checkpoint: nextCheckpoint,
+          stage: nextCheckpoint.stage,
+          message: stageMessage,
+          partialContent: nextCheckpoint.finalContent ?? "",
+          status: "running",
+          expiresAt: getReviewCheckpointExpiry(),
+        });
+        if (reviewGenerationRunRef.current !== runId) return;
+        setReviewGenerationTask((current) => current?.draftId === draft.id ? {
+          ...current,
+          checkpoint: nextCheckpoint,
+          retryCount: nextCheckpoint.retryCount,
+          message: stageMessage,
+        } : current);
+      },
+    };
+
+    await persistReviewGenerationDraft(draft.id, {
+      status: "running",
+      stage: checkpointRef.current.stage,
+      message: checkpointRef.current.stage === "reading" ? "正在定位所选日期的会话内容。" : "正在从检查点继续生成。",
+      expiresAt: getReviewCheckpointExpiry(),
+    });
+    setReviewGenerationTask((current) => current?.draftId === draft.id ? {
+      ...current,
+      status: "running",
+      checkpoint: checkpointRef.current,
+      message: checkpointRef.current.stage === "reading" ? "正在定位所选日期的会话内容。" : "正在从检查点继续生成。",
+      startedAt: checkpointRef.current.startedAt,
+    } : current);
+    openReviewGenerationWorkspace();
+
+    try {
+      const input = await readSelectedConversationSessions(
+        request.selectedSessionIds,
+        jobId,
+        {
+          activityDateFrom: request.activityDateFrom,
+          activityDateTo: request.activityDateTo,
+        },
+        (event) => {
+          if (reviewGenerationRunRef.current !== runId) return;
+          messageCounts.set(event.sessionIndex, event.messageCount);
+          const nextProgress = toConversationReadProgressView(event);
+          setReviewGenerationTask((current) => current?.draftId === draft.id ? {
+            ...current,
+            progress: nextProgress,
+            message: nextProgress.message,
+            messageCount: Array.from(messageCounts.values()).reduce((sum, value) => sum + value, 0),
+            extractedChars: Math.max(current.extractedChars, event.extractedChars),
+          } : current);
+        },
+      );
+      if (controller.signal.aborted) throw new DOMException("已取消生成。", "AbortError");
+
+      await taskHooks.onCheckpoint({
+        ...checkpointRef.current,
+        stage: checkpointRef.current.finalContent ? checkpointRef.current.stage : "summarizing",
+        totalChars: input.totalChars,
+        messageCount: Array.from(messageCounts.values()).reduce((sum, value) => sum + value, 0),
+        chunkCount: input.transcriptChunks.filter((chunk) => chunk.trim()).length,
+        lastError: undefined,
+      });
+      setReviewGenerationTask((current) => current?.draftId === draft.id ? {
+        ...current,
+        extractedChars: input.totalChars,
+        sessionCount: input.sessions.length,
+      } : current);
+
+      const result = await handleGenerateCodexReview(
+        input,
+        (nextProgress) => {
+          if (reviewGenerationRunRef.current !== runId) return;
+          setReviewGenerationTask((current) => current?.draftId === draft.id ? {
+            ...current,
+            progress: nextProgress,
+            message: nextProgress.message,
+          } : current);
+        },
+        controller.signal,
+        taskHooks,
+      );
+      const completedCheckpoint: ReviewGenerationTaskCheckpointV1 = {
+        ...checkpointRef.current,
+        stage: "completed",
+        memorySuggestionStatus: result.memorySuggestionStatus,
+        memorySuggestion: checkpointRef.current.memorySuggestion,
+        persistedReviewId: result.replacementDraft ? undefined : result.review.id,
+        persistedReviewDraftId: result.replacementDraftId,
+        lastError: result.memorySuggestionStatus === "failed" || result.memorySuggestionStatus === "cancelled"
+          ? checkpointRef.current.memorySuggestion?.lastError
+          : undefined,
+      };
+      checkpointRef.current = completedCheckpoint;
+      const suggestionNeedsAttention = result.memorySuggestionStatus === "failed" || result.memorySuggestionStatus === "cancelled";
+      if (suggestionNeedsAttention) {
+        const retained = await persistReviewGenerationDraft(draft.id, {
+          status: "completed",
+          stage: "completed",
+          message: formatReviewGenerationResult(result),
+          checkpoint: completedCheckpoint,
+          partialContent: "",
+          expiresAt: getReviewCheckpointExpiry(),
+        });
+        setConversationGenerationDrafts((current) => [retained, ...current.filter((item) => item.id !== retained.id)]);
+      } else {
+        await deleteConversationGenerationDraft(draft.id);
+        setConversationGenerationDrafts((current) => current.filter((item) => item.id !== draft.id));
+      }
+      if (reviewGenerationRunRef.current === runId) {
+        setReviewGenerationTask((current) => current?.draftId === draft.id ? {
+          ...current,
+          status: "completed",
+          checkpoint: completedCheckpoint,
+          retryCount: completedCheckpoint.retryCount,
+          message: formatReviewGenerationResult(result),
+          resultReviewId: result.replacementDraft ? undefined : result.review.id,
+          resultReviewDraftId: result.replacementDraftId,
+          progress: { stage: "生成回顾", message: formatReviewGenerationResult(result), indicator: { mode: "completed", percent: 100 } },
+        } : current);
+        if (suggestionNeedsAttention) {
+          openReviewGenerationWorkspace();
+        } else {
+          closeReviewGenerationWorkspace();
+          setActiveView(result.replacementDraftId
+            ? { kind: "memory", subView: "archive", reviewDraftId: result.replacementDraftId }
+            : { kind: "memory", subView: "archive", reviewId: result.review.id });
+        }
+      }
+    } catch (error) {
+      const cancelled = controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
+      const safeError = getSafeErrorMessage(error, cancelled ? "任务已取消。" : "回顾生成失败。");
+      const failedCheckpoint: ReviewGenerationTaskCheckpointV1 = {
+        ...checkpointRef.current,
+        lastError: safeError,
+      };
+      checkpointRef.current = failedCheckpoint;
+      const status = cancelled ? "cancelled" : "failed";
+      await persistReviewGenerationDraft(draft.id, {
+        status,
+        stage: failedCheckpoint.stage,
+        message: safeError,
+        checkpoint: failedCheckpoint,
+        partialContent: failedCheckpoint.finalContent ?? "",
+        expiresAt: getReviewCheckpointExpiry(),
+      }).catch(() => undefined);
+      if (reviewGenerationRunRef.current === runId) {
+        setReviewGenerationTask((current) => current?.draftId === draft.id ? {
+          ...current,
+          status,
+          checkpoint: failedCheckpoint,
+          retryCount: failedCheckpoint.retryCount,
+          message: safeError,
+        } : current);
+      }
+    } finally {
+      if (reviewGenerationRunRef.current === runId) {
+        reviewGenerationAbortRef.current = null;
+        reviewGenerationJobIdRef.current = "";
+      }
+    }
+  };
+
+  const handleStartReviewGeneration = async (request: ConversationReviewGenerationRequest) => {
+    if (isConversationScanActive(conversationScanTaskRef.current)) {
+      openConversationScanWorkspace();
+      return;
+    }
+    if (reviewGenerationTaskRef.current?.status === "running") {
+      openReviewGenerationWorkspace();
+      return;
+    }
+    const currentSettings = settingsRef.current;
+    if (!currentSettings || getEffectiveAiSettings(currentSettings).keySource === "missing") {
+      throw new Error("还没有配置 AI API Key。");
+    }
+    const settingsFingerprint = await createReviewSettingsFingerprint(currentSettings);
+    const taskFingerprint = await createReviewTaskFingerprint(request, settingsFingerprint);
+    const checkpoint: ReviewGenerationTaskCheckpointV1 = {
+      ...createInitialReviewCheckpoint({
+        taskFingerprint,
+        settingsFingerprint,
+        activityDateFrom: request.activityDateFrom,
+        activityDateTo: request.activityDateTo,
+      }),
+      provider: currentSettings.provider,
+      protocol: currentSettings.protocol,
+      model: currentSettings.model,
+    };
+    const draft = await handleSaveGenerationDraft({
+      reviewKey: request.reviewKey,
+      date: request.date,
+      reviewKind: request.reviewKind,
+      sourceKind: request.sourceKind,
+      sourceLabel: request.sourceLabel,
+      title: `${request.date} 回顾生成任务`,
+      partialContent: "",
+      selectedSessionIds: request.selectedSessionIds,
+      stage: "reading",
+      message: "正在定位所选日期的会话内容。",
+      status: "running",
+      checkpoint,
+      expiresAt: getReviewCheckpointExpiry(),
+    });
+    const runtime: ReviewGenerationRuntime = {
+      draftId: draft.id,
+      request,
+      status: "running",
+      checkpoint,
+      message: draft.message,
+      startedAt: checkpoint.startedAt,
+      sessionCount: request.selectedSessionIds.length,
+      messageCount: 0,
+      extractedChars: 0,
+      retryCount: 0,
+    };
+    reviewGenerationTaskRef.current = runtime;
+    setReviewGenerationTask(runtime);
+    openReviewGenerationWorkspace();
+    void runReviewGenerationTask(draft, request);
+  };
+
+  const requestFromGenerationDraft = (draft: ConversationGenerationDraft): ConversationReviewGenerationRequest => ({
+    reviewKey: draft.reviewKey || `${draft.date ?? "selected"}:${draft.reviewKind}:${draft.sourceKind ?? "mixed"}`,
+    date: draft.date || draft.checkpoint?.activityDateTo || draft.checkpoint?.activityDateFrom || toDateKey(new Date()),
+    reviewKind: draft.reviewKind,
+    sourceKind: draft.sourceKind,
+    sourceLabel: draft.sourceLabel,
+    selectedSessionIds: draft.selectedSessionIds,
+    activityDateFrom: draft.checkpoint?.activityDateFrom,
+    activityDateTo: draft.checkpoint?.activityDateTo,
+  });
+
+  const handleResumeReviewGeneration = async (draftId?: string) => {
+    if (isConversationScanActive(conversationScanTaskRef.current)) {
+      openConversationScanWorkspace();
+      return;
+    }
+    const targetId = draftId ?? reviewGenerationTaskRef.current?.draftId;
+    const draft = conversationGenerationDrafts.find((item) => item.id === targetId);
+    if (!draft?.checkpoint) return;
+    const request = requestFromGenerationDraft(draft);
+    const runtime: ReviewGenerationRuntime = {
+      draftId: draft.id,
+      request,
+      status: "running",
+      checkpoint: draft.checkpoint,
+      message: "正在从检查点继续生成。",
+      startedAt: draft.checkpoint.startedAt,
+      sessionCount: request.selectedSessionIds.length,
+      messageCount: draft.checkpoint.messageCount ?? 0,
+      extractedChars: draft.checkpoint.totalChars,
+      retryCount: draft.checkpoint.retryCount,
+      resultReviewId: draft.checkpoint.persistedReviewId,
+      resultReviewDraftId: draft.checkpoint.persistedReviewDraftId,
+    };
+    if (
+      draft.checkpoint.stage === "memory-suggestion" &&
+      (draft.checkpoint.persistedReviewId || draft.checkpoint.persistedReviewDraftId)
+    ) {
+      const suggestionRuntime: ReviewGenerationRuntime = {
+        ...runtime,
+        status: "completed",
+        message: "回顾已保存，正在恢复长期记忆建议步骤。",
+      };
+      reviewGenerationTaskRef.current = suggestionRuntime;
+      setReviewGenerationTask(suggestionRuntime);
+      openReviewGenerationWorkspace();
+      void handleRetryReviewTaskMemorySuggestion();
+      return;
+    }
+    reviewGenerationTaskRef.current = runtime;
+    setReviewGenerationTask(runtime);
+    openReviewGenerationWorkspace();
+    void runReviewGenerationTask(draft, request);
+  };
+
+  const handleRestartReviewGeneration = async (draftId?: string) => {
+    if (isConversationScanActive(conversationScanTaskRef.current)) {
+      openConversationScanWorkspace();
+      return;
+    }
+    const targetId = draftId ?? reviewGenerationTaskRef.current?.draftId;
+    const draft = conversationGenerationDrafts.find((item) => item.id === targetId);
+    const currentSettings = settingsRef.current;
+    if (!draft || !currentSettings) return;
+    reviewGenerationAbortRef.current?.abort();
+    if (reviewGenerationJobIdRef.current) void cancelConversationReviewJob(reviewGenerationJobIdRef.current);
+    const request = requestFromGenerationDraft(draft);
+    const settingsFingerprint = await createReviewSettingsFingerprint(currentSettings);
+    const taskFingerprint = await createReviewTaskFingerprint(request, settingsFingerprint);
+    const checkpoint: ReviewGenerationTaskCheckpointV1 = {
+      ...createInitialReviewCheckpoint({
+        taskFingerprint,
+        settingsFingerprint,
+        activityDateFrom: request.activityDateFrom,
+        activityDateTo: request.activityDateTo,
+      }),
+      provider: currentSettings.provider,
+      protocol: currentSettings.protocol,
+      model: currentSettings.model,
+    };
+    const resetDraft = await persistReviewGenerationDraft(draft.id, {
+      status: "running",
+      stage: "reading",
+      message: "正在重新定位会话内容。",
+      partialContent: "",
+      checkpoint,
+      expiresAt: getReviewCheckpointExpiry(),
+    });
+    const runtime: ReviewGenerationRuntime = {
+      draftId: draft.id,
+      request,
+      status: "running",
+      checkpoint,
+      message: "正在重新定位会话内容。",
+      startedAt: checkpoint.startedAt,
+      sessionCount: request.selectedSessionIds.length,
+      messageCount: 0,
+      extractedChars: 0,
+      retryCount: 0,
+    };
+    reviewGenerationTaskRef.current = runtime;
+    setReviewGenerationTask(runtime);
+    openReviewGenerationWorkspace();
+    void runReviewGenerationTask(resetDraft, request);
+  };
+
+  const handleCancelReviewGeneration = () => {
+    reviewGenerationAbortRef.current?.abort(new DOMException("已取消生成。", "AbortError"));
+    if (reviewGenerationJobIdRef.current) void cancelConversationReviewJob(reviewGenerationJobIdRef.current);
+    setReviewGenerationTask((current) => current ? { ...current, message: "正在停止并保存检查点。" } : current);
+  };
+
+  const handleDeleteReviewGeneration = async (draftId?: string) => {
+    const targetId = draftId ?? reviewGenerationTaskRef.current?.draftId;
+    if (!targetId) return;
+    if (reviewGenerationTaskRef.current?.draftId === targetId) {
+      reviewGenerationAbortRef.current?.abort();
+      reviewGenerationRunRef.current += 1;
+      setReviewGenerationTask(null);
+      reviewGenerationTaskRef.current = null;
+      closeReviewGenerationWorkspace();
+    }
+    await deleteConversationGenerationDraft(targetId);
+    setConversationGenerationDrafts((current) => current.filter((item) => item.id !== targetId));
+  };
+
+  const requestRestartReviewGeneration = async (draftId?: string) => {
+    setPendingConfirm({
+      title: "重新开始生成？",
+      message: "现有检查点和已完成分段摘要将被删除，任务会从读取会话重新开始。",
+      confirmLabel: "重新开始",
+      cancelLabel: "保留检查点",
+      danger: true,
+      onConfirm: async () => handleRestartReviewGeneration(draftId),
+    });
+  };
+
+  const requestDeleteReviewGeneration = async (draftId?: string) => {
+    setPendingConfirm({
+      title: "删除生成任务？",
+      message: "任务检查点和已完成分段摘要将被删除，且无法恢复。已经保存的正式回顾不会受影响。",
+      confirmLabel: "删除任务",
+      cancelLabel: "取消",
+      danger: true,
+      onConfirm: async () => handleDeleteReviewGeneration(draftId),
+    });
+  };
+
+  const handleOpenReviewGenerationResult = () => {
+    const task = reviewGenerationTaskRef.current;
+    if (!task) return;
+    closeReviewGenerationWorkspace();
+    if (task.resultReviewDraftId) {
+      setActiveView({ kind: "memory", subView: "archive", reviewDraftId: task.resultReviewDraftId });
+    } else if (task.resultReviewId) {
+      setActiveView({ kind: "memory", subView: "archive", reviewId: task.resultReviewId });
+    }
   };
 
   const handleUpdateCodexReview = async (id: string, patch: Partial<CodexDailyReview>) => {
     await updateCodexDailyReview(id, patch);
     await refreshMemoryData();
+  };
+
+  const handleUpdateDailyReviewDraft = async (id: string, patch: Partial<DailyReviewReplacementDraft>) => {
+    const updated = await updateDailyReviewReplacementDraft(id, patch);
+    await refreshMemoryData();
+    return updated;
+  };
+
+  const handleGenerateMemorySuggestion = async (
+    source: ReviewMemorySuggestionSource,
+    onProgress?: (progress: CodexReviewProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<MemorySuggestionGenerationResult> => {
+    const sourceReview = source.kind === "review" ? source.review : source.draft;
+    const review: CodexDailyReview = {
+      id: source.kind === "review" ? source.review.id : source.draft.targetReviewId ?? source.draft.id,
+      reviewKey: sourceReview.reviewKey,
+      date: sourceReview.date,
+      reviewKind: sourceReview.reviewKind,
+      sourceKind: sourceReview.sourceKind,
+      sourceLabel: sourceReview.sourceLabel,
+      title: sourceReview.title,
+      content: sourceReview.content,
+      sessionCount: sourceReview.sessionCount,
+      sessionIds: sourceReview.sessionIds,
+      activityDateFrom: sourceReview.activityDateFrom,
+      activityDateTo: sourceReview.activityDateTo,
+      sourceReviewIds: sourceReview.sourceReviewIds,
+      createdAt: sourceReview.createdAt,
+      updatedAt: sourceReview.updatedAt,
+    };
+    const result = await generateMemorySuggestionForReview(
+      review,
+      source.kind === "review"
+        ? { sourceReviewId: source.review.id }
+        : { sourceReviewDraftId: source.draft.id },
+      onProgress,
+      signal,
+    );
+    await refreshMemoryData();
+    return result;
+  };
+
+  const handleRetryReviewTaskMemorySuggestion = async () => {
+    const task = reviewGenerationTaskRef.current;
+    if (!task || task.status === "running") return;
+    const checkpoint = task.checkpoint;
+    const source: ReviewMemorySuggestionSource | undefined = checkpoint.persistedReviewDraftId
+      ? (() => {
+          const draft = dailyReviewDrafts.find((item) => item.id === checkpoint.persistedReviewDraftId);
+          return draft ? { kind: "replacement" as const, draft } : undefined;
+        })()
+      : (() => {
+          const review = codexReviews.find((item) => item.id === checkpoint.persistedReviewId);
+          return review ? { kind: "review" as const, review } : undefined;
+        })();
+    if (!source) {
+      setReviewGenerationTask((current) => current ? {
+        ...current,
+        message: "找不到已保存的来源回顾，无法重试长期记忆建议。",
+      } : current);
+      return;
+    }
+
+    const controller = new AbortController();
+    reviewGenerationAbortRef.current?.abort();
+    reviewGenerationAbortRef.current = controller;
+    const runningCheckpoint: ReviewGenerationTaskCheckpointV1 = {
+      ...checkpoint,
+      stage: "memory-suggestion",
+      lastError: undefined,
+      memorySuggestionStatus: undefined,
+      memorySuggestion: checkpoint.memorySuggestion
+        ? updateMemorySuggestionCheckpoint(checkpoint.memorySuggestion, { status: "pending", lastError: undefined })
+        : undefined,
+    };
+    setReviewGenerationTask((current) => current ? {
+      ...current,
+      status: "running",
+      checkpoint: runningCheckpoint,
+      message: "正在重新分析长期记忆建议。",
+      progress: { stage: "分析长期记忆", message: "正在重新分析长期记忆建议。" },
+    } : current);
+    openReviewGenerationWorkspace();
+    await persistReviewGenerationDraft(task.draftId, {
+      status: "running",
+      stage: "memory-suggestion",
+      checkpoint: runningCheckpoint,
+      message: "正在重新分析长期记忆建议。",
+      expiresAt: getReviewCheckpointExpiry(),
+    }).catch(() => undefined);
+
+    try {
+      const result = await handleGenerateMemorySuggestion(
+        source,
+        (progress) => setReviewGenerationTask((current) => current ? {
+          ...current,
+          message: progress.message,
+          progress,
+        } : current),
+        controller.signal,
+      );
+      const completedCheckpoint: ReviewGenerationTaskCheckpointV1 = {
+        ...runningCheckpoint,
+        stage: "completed",
+        memorySuggestionStatus: result.status,
+        memorySuggestion: result.checkpoint,
+        lastError: result.error,
+      };
+      const resultMessage = formatReviewGenerationResult({
+        replacementDraft: source.kind === "replacement",
+        patchDraft: result.patchDraft,
+        memorySuggestionStatus: result.status,
+      });
+      if (result.status === "created" || result.status === "none") {
+        await deleteConversationGenerationDraft(task.draftId).catch(() => undefined);
+        setConversationGenerationDrafts((current) => current.filter((item) => item.id !== task.draftId));
+      } else {
+        const retained = await persistReviewGenerationDraft(task.draftId, {
+          status: "completed",
+          stage: "completed",
+          checkpoint: completedCheckpoint,
+          message: resultMessage,
+          expiresAt: getReviewCheckpointExpiry(),
+        });
+        setConversationGenerationDrafts((current) => [retained, ...current.filter((item) => item.id !== retained.id)]);
+      }
+      setReviewGenerationTask((current) => current ? {
+        ...current,
+        status: "completed",
+        checkpoint: completedCheckpoint,
+        retryCount: completedCheckpoint.retryCount + (result.checkpoint?.retryCount ?? 0),
+        message: resultMessage,
+        progress: { stage: "分析长期记忆", message: resultMessage, indicator: { mode: "completed", percent: 100 } },
+      } : current);
+    } catch (error) {
+      const safeError = getSafeErrorMessage(error, "长期记忆建议未生成。");
+      const failedSuggestion = runningCheckpoint.memorySuggestion
+        ? updateMemorySuggestionCheckpoint(runningCheckpoint.memorySuggestion, {
+            status: "failed",
+            lastError: safeError,
+          })
+        : undefined;
+      const failedCheckpoint: ReviewGenerationTaskCheckpointV1 = {
+        ...runningCheckpoint,
+        stage: "completed",
+        memorySuggestionStatus: "failed",
+        memorySuggestion: failedSuggestion,
+        lastError: safeError,
+      };
+      const resultMessage = `回顾已保存。长期记忆建议未生成，可稍后重试。${safeError ? ` ${safeError}` : ""}`;
+      await persistReviewGenerationDraft(task.draftId, {
+        status: "completed",
+        stage: "completed",
+        checkpoint: failedCheckpoint,
+        message: resultMessage,
+        expiresAt: getReviewCheckpointExpiry(),
+      }).catch(() => undefined);
+      setReviewGenerationTask((current) => current ? {
+        ...current,
+        status: "completed",
+        checkpoint: failedCheckpoint,
+        message: resultMessage,
+        progress: { stage: "分析长期记忆", message: resultMessage, indicator: { mode: "completed", percent: 100 } },
+      } : current);
+    } finally {
+      reviewGenerationAbortRef.current = null;
+      await refreshMemoryData().catch(() => undefined);
+    }
   };
 
   const handleApplyDailyReviewDraft = async (id: string) => {
@@ -2577,19 +3618,34 @@ export default function App() {
               codexSessionIndex={codexSessionIndex}
               dailyReviewDrafts={dailyReviewDrafts}
               conversationGenerationDrafts={conversationGenerationDrafts}
+              reviewGenerationTask={reviewGenerationTask}
+              conversationScanQuery={conversationScanQuery}
+              conversationScanTask={conversationScanTask}
+              lastCompletedConversationScanKey={lastCompletedConversationScanKey}
               settings={settings}
               initialSubView={activeView.kind === "memory" ? activeView.subView : undefined}
+              onSubViewChange={(subView) => {
+                setActiveView((current) => current.kind === "memory" ? { kind: "memory", subView } : current);
+              }}
               initialMemoryId={activeView.kind === "memory" ? activeView.memoryId : undefined}
               initialReviewId={activeView.kind === "memory" ? activeView.reviewId : undefined}
               initialReviewDraftId={activeView.kind === "memory" ? activeView.reviewDraftId : undefined}
               initialSummaryId={activeView.kind === "memory" ? activeView.summaryId : undefined}
               mainWindowMaximized={mainWindowMaximized}
               onUpdateMemory={handleUpdateMemory}
-              onGenerateCodexReview={handleGenerateCodexReview}
               onGenerateCombinedReview={handleGenerateCombinedReview}
-              onSaveGenerationDraft={handleSaveGenerationDraft}
-              onReplaceCodexSessionIndex={handleReplaceCodexSessionIndex}
+              onStartReviewGeneration={handleStartReviewGeneration}
+              onOpenReviewGeneration={openReviewGenerationWorkspace}
+              onConversationScanQueryChange={setConversationScanQuery}
+              onStartConversationScan={handleStartConversationScan}
+              onOpenConversationScan={openConversationScanWorkspace}
+              onOpenSettings={() => handleSelectView({ kind: "settings" })}
+              onResumeReviewGeneration={handleResumeReviewGeneration}
+              onRestartReviewGeneration={requestRestartReviewGeneration}
+              onDeleteReviewGeneration={requestDeleteReviewGeneration}
               onUpdateCodexReview={handleUpdateCodexReview}
+              onUpdateDailyReviewDraft={handleUpdateDailyReviewDraft}
+              onGenerateMemorySuggestion={handleGenerateMemorySuggestion}
               onApplyDailyReviewDraft={handleApplyDailyReviewDraft}
               onIgnoreDailyReviewDraft={handleIgnoreDailyReviewDraft}
               onArchiveRollingWorkReview={handleArchiveRollingWorkReview}
@@ -2763,6 +3819,75 @@ export default function App() {
             </div>
           )}
         </div>
+        {conversationScanTask && conversationScanWorkspaceOpen && (
+          <ConversationScanWorkspace
+            task={conversationScanTask}
+            onCollapse={closeConversationScanWorkspace}
+            onCancel={() => void handleCancelConversationScan()}
+            onViewResults={handleOpenConversationScanResults}
+            onRetry={handleRetryConversationScan}
+          />
+        )}
+        {reviewGenerationTask && reviewGenerationWorkspaceOpen && (
+          <ReviewGenerationWorkspace
+            task={reviewGenerationTask}
+            onCollapse={closeReviewGenerationWorkspace}
+            onCancel={handleCancelReviewGeneration}
+            onResume={() => void handleResumeReviewGeneration(reviewGenerationTask.draftId)}
+            onRestart={() => requestRestartReviewGeneration(reviewGenerationTask.draftId)}
+            onDelete={() => requestDeleteReviewGeneration(reviewGenerationTask.draftId)}
+            onOpenResult={handleOpenReviewGenerationResult}
+            onRetryMemorySuggestion={() => void handleRetryReviewTaskMemorySuggestion()}
+          />
+        )}
+        {collapsedConversationTaskEntry === "review" && reviewGenerationTask && (
+          <button
+            className="review-generation-entry absolute bottom-5 right-5 z-30 flex max-w-[360px] items-center gap-3 border border-line bg-paper/96 px-4 py-3 text-left shadow-[0_14px_34px_rgba(0,0,0,0.18)] backdrop-blur-md"
+            type="button"
+            onClick={openReviewGenerationWorkspace}
+            aria-label="打开回顾生成进度"
+          >
+            <span className={`review-generation-entry-dot ${reviewGenerationTask.status === "running" ? "is-running" : ""}`} aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-medium text-ink">
+                {reviewGenerationTask.status === "completed" &&
+                (reviewGenerationTask.checkpoint.memorySuggestion?.status === "failed" ||
+                  reviewGenerationTask.checkpoint.memorySuggestion?.status === "cancelled")
+                  ? "回顾已保存，建议待处理"
+                  : reviewGenerationTask.status === "completed"
+                    ? "回顾已生成"
+                    : reviewGenerationTask.status === "running"
+                      ? "正在生成工作回顾"
+                      : "回顾生成已暂停"}
+              </span>
+              <span className="mt-0.5 block truncate text-xs text-ink/48">{reviewGenerationTask.message}</span>
+            </span>
+            <ChevronRight size={15} className="shrink-0 text-ink/42" />
+          </button>
+        )}
+        {collapsedConversationTaskEntry === "scan" && conversationScanTask && (
+          <button
+            className="review-generation-entry absolute bottom-5 right-5 z-30 flex max-w-[360px] items-center gap-3 border border-line bg-paper/96 px-4 py-3 text-left shadow-[0_14px_34px_rgba(0,0,0,0.18)] backdrop-blur-md"
+            type="button"
+            onClick={openConversationScanWorkspace}
+            aria-label="打开会话扫描进度"
+          >
+            <span className={`review-generation-entry-dot ${isConversationScanActive(conversationScanTask) ? "is-running" : ""}`} aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-medium text-ink">
+                {conversationScanTask.status === "completed"
+                  ? "会话扫描已完成"
+                  : conversationScanTask.status === "cancelled"
+                    ? "会话扫描已取消"
+                    : conversationScanTask.status === "failed"
+                      ? "会话扫描需要处理"
+                      : "正在扫描 AI 对话"}
+              </span>
+              <span className="mt-0.5 block truncate text-xs text-ink/48">{conversationScanTask.message}</span>
+            </span>
+            <ChevronRight size={15} className="shrink-0 text-ink/42" />
+          </button>
+        )}
       </div>
       <MobileGlobalNav activeView={activeView} onSelectView={handleSelectView} />
       <ImportDialog
@@ -2870,10 +3995,10 @@ function getPathBaseName(path: string) {
 
 function createFallbackExtractDraft(entry: JournalEntry): ExtractDraft {
   return {
-    title: `日志沉淀 - ${createLocalTitleFromContent(entry.content)}`,
+    title: `日志提炼 - ${createLocalTitleFromContent(entry.content)}`,
     content: entry.content,
     tags: Array.from(new Set([...entry.tags, "知识卡片"])),
-    aiSummary: "从日志沉淀的知识卡片",
+    aiSummary: "从日志提炼的知识卡片",
   };
 }
 

@@ -14,6 +14,8 @@ type DatePickerPopoverProps = {
   onClear: () => void;
   placeholder: string;
   buttonLabel: string;
+  openRequestKey?: number;
+  disabled?: boolean;
 };
 
 export function DatePickerPopover({
@@ -22,14 +24,30 @@ export function DatePickerPopover({
   onClear,
   placeholder,
   buttonLabel,
+  openRequestKey,
+  disabled = false,
 }: DatePickerPopoverProps) {
   const today = toDateKey(new Date());
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState(() => (value || today).slice(0, 7));
   const [popoverPosition, setPopoverPosition] = useState<{ left: number; top: number } | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLElement | null>(null);
+  const previousOpenRequestKeyRef = useRef(openRequestKey);
   const days = useMemo(() => getCalendarDays(month), [month]);
+
+  useEffect(() => {
+    if (openRequestKey === undefined || previousOpenRequestKeyRef.current === openRequestKey) return;
+    previousOpenRequestKeyRef.current = openRequestKey;
+    if (disabled) return;
+    triggerRef.current?.focus();
+    setOpen(true);
+  }, [disabled, openRequestKey]);
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   useEffect(() => {
     if (open) setMonth((value || today).slice(0, 7));
@@ -87,11 +105,13 @@ export function DatePickerPopover({
   return (
     <div ref={rootRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         className={`field-control field-standard flex w-full items-center justify-between gap-2 px-2 text-left text-xs ${
           value ? "font-mono text-ink" : "text-ink/35"
-        }`}
+        } disabled:cursor-not-allowed disabled:opacity-50`}
         onClick={() => setOpen((current) => !current)}
+        disabled={disabled}
         aria-label={buttonLabel}
         aria-expanded={open}
       >

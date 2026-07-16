@@ -1,5 +1,6 @@
 import { Save, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { FolderPicker } from "./FolderPicker";
 import { getSafeErrorMessage } from "../lib/redaction";
 import type { FolderNode } from "../types";
@@ -37,20 +38,16 @@ export function ExtractDialog({
 }: ExtractDialogProps) {
   const [saving, setSaving] = useState(false);
   const [localMessage, setLocalMessage] = useState("");
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const savingRef = useRef(false);
-  const pendingCloseRef = useRef(false);
   const dirty = Boolean(draft && !loading);
 
   useEffect(() => {
     if (open) {
       setLocalMessage("");
-      pendingCloseRef.current = false;
+      setDiscardConfirmOpen(false);
     }
   }, [open]);
-
-  useEffect(() => {
-    pendingCloseRef.current = false;
-  }, [draft?.aiSummary, draft?.content, draft?.folderId, draft?.tags, draft?.title]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -72,9 +69,8 @@ export function ExtractDialog({
       onCancelGeneration?.();
       return;
     }
-    if (dirty && !pendingCloseRef.current) {
-      pendingCloseRef.current = true;
-      setLocalMessage("这份知识卡片草稿还没有保存。再次点击关闭才会放弃它。");
+    if (dirty) {
+      setDiscardConfirmOpen(true);
       return;
     }
     onClose();
@@ -97,11 +93,11 @@ export function ExtractDialog({
 
   return (
     <div className="modal-backdrop">
-      <section aria-label="沉淀为知识卡片" aria-modal="true" className="modal-surface flex max-h-[92vh] w-full max-w-3xl flex-col" role="dialog">
+      <section aria-label="提炼为知识卡片" aria-modal="true" className="modal-surface flex max-h-[92vh] w-full max-w-3xl flex-col" role="dialog">
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel/70 px-5 py-4">
           <div>
-            <h2 className="text-lg font-semibold text-ink">沉淀为知识卡片</h2>
-            <p className="mt-1 text-sm text-ink/52">把这一段日常，整理成可以长期留下的知识。</p>
+            <h2 className="text-lg font-semibold text-ink">提炼为知识卡片</h2>
+            <p className="mt-1 text-sm text-ink/52">从这条日志中提炼可复用的知识。</p>
           </div>
           <button
             className="soft-button icon-action-standard"
@@ -117,7 +113,7 @@ export function ExtractDialog({
         <div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin">
           {loading || !draft ? (
             <div className="flex min-h-[180px] flex-col items-center justify-center gap-3 border-t border-line/60 bg-transparent text-sm text-ink/45">
-              <span>正在整理知识卡片草稿...</span>
+              <span>正在生成知识卡片草稿...</span>
               {localMessage && <span className="text-xs text-ink/50">{localMessage}</span>}
               {loading && (
                 <button className="soft-button action-standard text-xs" onClick={onCancelGeneration}>
@@ -193,6 +189,18 @@ export function ExtractDialog({
           )}
         </div>
       </section>
+      <ConfirmDialog
+        open={discardConfirmOpen}
+        title="放弃知识卡片草稿？"
+        message="关闭后，这份未保存的知识卡片草稿将被舍弃。"
+        confirmLabel="舍弃草稿"
+        danger
+        onCancel={() => setDiscardConfirmOpen(false)}
+        onConfirm={() => {
+          setDiscardConfirmOpen(false);
+          onClose();
+        }}
+      />
     </div>
   );
 }

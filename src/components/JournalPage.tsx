@@ -16,6 +16,7 @@
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode, type TextareaHTMLAttributes } from "react";
 import { LinkPanel } from "./LinkPanel";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { PageWorkspace } from "./PageWorkspace";
 import { getSafeErrorMessage } from "../lib/redaction";
 import type { EntityKind, Item, JournalEntry, KnowledgeLink, MemoryCard, SummaryReport } from "../types";
@@ -102,9 +103,9 @@ export function JournalPage({
   const [reportsOpen, setReportsOpen] = useState(false);
   const [expandedJournalEntryIds, setExpandedJournalEntryIds] = useState<string[]>([]);
   const [journalMessage, setJournalMessage] = useState("");
-  const [pendingCancelEditId, setPendingCancelEditId] = useState("");
-  const [pendingSwitchEditId, setPendingSwitchEditId] = useState("");
-  const [pendingDeleteEditId, setPendingDeleteEditId] = useState("");
+  const [pendingInlineAction, setPendingInlineAction] = useState<
+    { kind: "cancel" } | { kind: "switch"; entry: JournalEntry } | { kind: "delete"; entryId: string } | null
+  >(null);
   const [pendingScrollEntryId, setPendingScrollEntryId] = useState("");
   const savingRef = useRef(false);
   const savingEditRef = useRef("");
@@ -308,14 +309,10 @@ export function JournalPage({
   };
 
   const startEdit = (entry: JournalEntry) => {
-    if (editingId && editingId !== entry.id && inlineEditDirty && pendingSwitchEditId !== entry.id) {
-      setPendingSwitchEditId(entry.id);
-      setJournalMessage("当前日志还有未保存的编辑。请先保存，或再次点击目标日志的“编辑”才会切换。");
+    if (editingId && editingId !== entry.id && inlineEditDirty) {
+      setPendingInlineAction({ kind: "switch", entry });
       return;
     }
-    setPendingCancelEditId("");
-    setPendingSwitchEditId("");
-    setPendingDeleteEditId("");
     setEditingId(entry.id);
     setDraftContent(entry.content);
     setDraftTags(entry.tags.join("，"));
@@ -338,9 +335,7 @@ export function JournalPage({
         todos: parseList(draftTodos),
       });
       setEditingId("");
-      setPendingCancelEditId("");
-      setPendingSwitchEditId("");
-      setPendingDeleteEditId("");
+      setPendingInlineAction(null);
       clearJournalInlineEditDraft();
     } catch (error) {
       setJournalMessage(getSafeErrorMessage(error, "日志保存失败，请稍后再试。"));
@@ -355,40 +350,28 @@ export function JournalPage({
       setJournalMessage("正在保存，完成后再取消。");
       return;
     }
-    if (inlineEditDirty && pendingCancelEditId !== editingId) {
-      setPendingCancelEditId(editingId);
-      setJournalMessage("这条日志还有未保存的编辑。再次点击取消才会放弃草稿。");
+    if (inlineEditDirty) {
+      setPendingInlineAction({ kind: "cancel" });
       return;
     }
     setEditingId("");
     setDraftContent("");
     setDraftTags("");
     setDraftTodos("");
-    setPendingCancelEditId("");
-    setPendingSwitchEditId("");
-    setPendingDeleteEditId("");
+    setPendingInlineAction(null);
     setJournalMessage("");
     clearJournalInlineEditDraft();
   };
 
   const updateDraftContent = (value: string) => {
-    setPendingCancelEditId("");
-    setPendingSwitchEditId("");
-    setPendingDeleteEditId("");
     setDraftContent(value);
   };
 
   const updateDraftTags = (value: string) => {
-    setPendingCancelEditId("");
-    setPendingSwitchEditId("");
-    setPendingDeleteEditId("");
     setDraftTags(value);
   };
 
   const updateDraftTodos = (value: string) => {
-    setPendingCancelEditId("");
-    setPendingSwitchEditId("");
-    setPendingDeleteEditId("");
     setDraftTodos(value);
   };
 
@@ -397,9 +380,8 @@ export function JournalPage({
       setJournalMessage("这条日志正在保存，完成后再删除。");
       return;
     }
-    if (editingId === id && inlineEditDirty && pendingDeleteEditId !== id) {
-      setPendingDeleteEditId(id);
-      setJournalMessage("这条日志还有未保存的编辑。再次点击删除，才会放弃草稿并进入删除确认。");
+    if (editingId === id && inlineEditDirty) {
+      setPendingInlineAction({ kind: "delete", entryId: id });
       return;
     }
     const deleted = await onDeleteEntry(id);
@@ -408,9 +390,7 @@ export function JournalPage({
       setDraftContent("");
       setDraftTags("");
       setDraftTodos("");
-      setPendingCancelEditId("");
-      setPendingSwitchEditId("");
-      setPendingDeleteEditId("");
+      setPendingInlineAction(null);
       clearJournalInlineEditDraft();
     }
   };
@@ -604,10 +584,41 @@ export function JournalPage({
           setDraftContent("");
           setDraftTags("");
           setDraftTodos("");
-          setPendingCancelEditId("");
-          setPendingSwitchEditId("");
-          setPendingDeleteEditId("");
+          setPendingInlineAction(null);
           clearJournalInlineEditDraft();
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(pendingInlineAction)}
+        title={pendingInlineAction?.kind === "switch" ? "放弃当前日志修改？" : pendingInlineAction?.kind === "delete" ? "继续删除日志？" : "放弃未保存修改？"}
+        message={pendingInlineAction?.kind === "switch"
+          ? "切换到另一条日志前，当前未保存编辑将被放弃。"
+          : pendingInlineAction?.kind === "delete"
+            ? "继续后会放弃当前未保存编辑，并进入删除日志确认。"
+            : "取消编辑后，这条日志的未保存修改将被放弃。"}
+        confirmLabel={pendingInlineAction?.kind === "switch" ? "放弃并切换" : pendingInlineAction?.kind === "delete" ? "继续删除" : "放弃修改"}
+        danger
+        onCancel={() => setPendingInlineAction(null)}
+        onConfirm={async () => {
+          const action = pendingInlineAction;
+          if (!action) return;
+          setEditingId("");
+          setDraftContent("");
+          setDraftTags("");
+          setDraftTodos("");
+          setJournalMessage("");
+          clearJournalInlineEditDraft();
+          setPendingInlineAction(null);
+          if (action.kind === "switch") {
+            setEditingId(action.entry.id);
+            setDraftContent(action.entry.content);
+            setDraftTags(action.entry.tags.join("，"));
+            setDraftTodos(action.entry.todos.join("\n"));
+            return;
+          }
+          if (action.kind === "delete") {
+            await onDeleteEntry(action.entryId);
+          }
         }}
       />
     </PageWorkspace>
@@ -985,9 +996,9 @@ function CompactJournalEntry({
               {relatedCount > 0 && <span className="text-xs text-ink/42">相关 {relatedCount}</span>}
             </div>
             <div className="journal-entry-actions flex flex-wrap items-center gap-1.5 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
-            <button className="ghost-action action-micro" disabled={savingEdit} onClick={() => onExtractToLibrary(entry)} aria-label="将这条日志交给 AI 沉淀为知识卡片">
+            <button className="ghost-action action-micro" disabled={savingEdit} onClick={() => onExtractToLibrary(entry)} aria-label="将这条日志提炼为知识卡片">
               <Sparkles size={13} className="mr-1 inline" />
-              AI 沉淀
+              提炼为知识卡片
             </button>
             <button className="ghost-action action-micro" disabled={savingEdit} onClick={() => onOpenFullscreen(entry)} aria-label="全屏查看这条日志">
               <Maximize2 size={13} className="mr-1 inline" />

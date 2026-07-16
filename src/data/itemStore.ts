@@ -1354,7 +1354,7 @@ export async function createDailyReviewReplacementDraft(input: CreateDailyReview
     ...input,
     reviewKey,
     sourceLabel: input.sourceLabel || getReviewSourceLabel(input.reviewKind, input.sourceKind),
-    title: input.title.trim() || "回顾替换草稿",
+    title: input.title.trim() || "待确认更新",
     content: input.content.trim(),
     sessionIds: input.sessionIds ?? [],
     sourceReviewIds: input.sourceReviewIds ?? [],
@@ -1410,6 +1410,8 @@ export async function applyDailyReviewReplacementDraft(id: string) {
     content: draft.content.trim(),
     sessionCount: draft.sessionCount,
     sessionIds: draft.sessionIds,
+    activityDateFrom: draft.activityDateFrom,
+    activityDateTo: draft.activityDateTo,
     sourceReviewIds: draft.sourceReviewIds,
     updatedAt: now,
   };
@@ -1462,6 +1464,22 @@ export async function getConversationGenerationDrafts() {
   const db = await getDb();
   const drafts = await db.getAll(CONVERSATION_GENERATION_DRAFT_STORE);
   return drafts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function deleteConversationGenerationDraft(id: string) {
+  const db = await getDb();
+  await db.delete(CONVERSATION_GENERATION_DRAFT_STORE, id);
+}
+
+export async function removeExpiredConversationGenerationDrafts(now = new Date()) {
+  const db = await getDb();
+  const drafts = await db.getAll(CONVERSATION_GENERATION_DRAFT_STORE);
+  const expired = drafts.filter((draft) => draft.expiresAt && new Date(draft.expiresAt).getTime() <= now.getTime());
+  if (expired.length === 0) return 0;
+  const tx = db.transaction(CONVERSATION_GENERATION_DRAFT_STORE, "readwrite");
+  await Promise.all(expired.map((draft) => tx.store.delete(draft.id)));
+  await tx.done;
+  return expired.length;
 }
 
 export async function replaceCodexSessionIndex(records: ConversationSessionIndex[]) {
@@ -1532,10 +1550,14 @@ export async function createMemoryPatchDraft(input: CreateMemoryPatchDraftInput)
   const db = await getDb();
   const now = formatTimestamp();
 
-  if (input.sourceReviewId) {
+  if (input.sourceReviewId || input.sourceReviewDraftId) {
     const drafts = await db.getAll(MEMORY_PATCH_STORE);
     const existing = drafts.find(
-      (draft) => draft.status === "pending" && draft.sourceReviewId === input.sourceReviewId,
+      (draft) => draft.status === "pending" && (
+        input.sourceReviewDraftId
+          ? draft.sourceReviewDraftId === input.sourceReviewDraftId
+          : draft.sourceReviewId === input.sourceReviewId
+      ),
     );
 
     if (existing) {
@@ -1937,7 +1959,7 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
     })),
     ...snapshot.dailyReviewDrafts.filter((draft) => draft.status === "pending").map((draft) => ({
       id: draft.id,
-      title: `${draft.title || "回顾替换草稿"} · 草稿`,
+      title: `${draft.title || "待确认更新"} · 待确认`,
       snippetSource: [draft.title, draft.content, draft.sourceLabel, draft.status, draft.date].join(" "),
       updatedAt: draft.updatedAt,
       route: { kind: "memory" as const, subView: "archive" as const, reviewId: draft.targetReviewId, reviewDraftId: draft.id },

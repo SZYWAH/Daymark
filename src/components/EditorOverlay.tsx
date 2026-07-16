@@ -1,6 +1,7 @@
 import { Save, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { EditForm } from "./EditForm";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { getSafeErrorMessage } from "../lib/redaction";
 import type { FolderNode, Item } from "../types";
 
@@ -29,28 +30,23 @@ export function EditorOverlay({
 }: EditorOverlayProps) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const savingRef = useRef(false);
-  const pendingCancelRef = useRef(false);
 
   useEffect(() => {
     if (open) {
       setMessage("");
-      pendingCancelRef.current = false;
+      setDiscardConfirmOpen(false);
     }
   }, [open]);
-
-  useEffect(() => {
-    pendingCancelRef.current = false;
-  }, [draft?.aiSummary, draft?.content, draft?.filePath, draft?.folderId, draft?.processStatus, draft?.readingStatus, draft?.sourceUrl, draft?.title, draft?.todos, dirty, tagText]);
 
   const requestCancel = () => {
     if (savingRef.current) {
       setMessage("正在保存，完成后再关闭。");
       return;
     }
-    if (dirty && !pendingCancelRef.current) {
-      pendingCancelRef.current = true;
-      setMessage("这份编辑还没有保存。再次点击关闭才会放弃修改。");
+    if (dirty) {
+      setDiscardConfirmOpen(true);
       return;
     }
     onCancel();
@@ -127,6 +123,18 @@ export function EditorOverlay({
           />
         </div>
       </section>
+      <ConfirmDialog
+        open={discardConfirmOpen}
+        title="放弃未保存修改？"
+        message="关闭后，这次对资料的修改不会保存。"
+        confirmLabel="放弃修改"
+        danger
+        onCancel={() => setDiscardConfirmOpen(false)}
+        onConfirm={() => {
+          setDiscardConfirmOpen(false);
+          onCancel();
+        }}
+      />
     </div>
   );
 }

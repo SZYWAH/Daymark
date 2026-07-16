@@ -49,17 +49,19 @@ pub(crate) fn redact_sensitive_text(value: &str) -> (String, bool) {
             continue;
         }
 
-        lines.push(line.split_whitespace()
-            .map(|part| {
-                if looks_like_secret(part) {
-                    redacted = true;
-                    "[已脱敏]".to_string()
-                } else {
-                    part.to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" "));
+        lines.push(
+            line.split_whitespace()
+                .map(|part| {
+                    if looks_like_secret(part) {
+                        redacted = true;
+                        "[已脱敏]".to_string()
+                    } else {
+                        part.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
     }
 
     (lines.join("\n"), redacted)
@@ -67,7 +69,13 @@ pub(crate) fn redact_sensitive_text(value: &str) -> (String, bool) {
 
 fn looks_like_secret(value: &str) -> bool {
     let trimmed = value.trim_matches(|ch: char| {
-        !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '.' && ch != '/' && ch != '+' && ch != '='
+        !ch.is_ascii_alphanumeric()
+            && ch != '_'
+            && ch != '-'
+            && ch != '.'
+            && ch != '/'
+            && ch != '+'
+            && ch != '='
     });
     if trimmed.len() < 16 {
         return false;
@@ -87,13 +95,19 @@ fn looks_like_secret(value: &str) -> bool {
         "ya29.",
         "AIza",
     ];
-    if common_prefixes.iter().any(|prefix| trimmed.starts_with(prefix)) && trimmed.len() >= 20 {
+    if common_prefixes
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+        && trimmed.len() >= 20
+    {
         return true;
     }
 
     if (trimmed.starts_with("AKIA") || trimmed.starts_with("ASIA"))
         && trimmed.len() == 20
-        && trimmed.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
     {
         return true;
     }
@@ -104,9 +118,15 @@ fn looks_like_secret(value: &str) -> bool {
 
     let has_alpha = trimmed.chars().any(|ch| ch.is_ascii_alphabetic());
     let has_digit = trimmed.chars().any(|ch| ch.is_ascii_digit());
-    let safe_charset = trimmed
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.' || ch == '/' || ch == '+' || ch == '=');
+    let safe_charset = trimmed.chars().all(|ch| {
+        ch.is_ascii_alphanumeric()
+            || ch == '_'
+            || ch == '-'
+            || ch == '.'
+            || ch == '/'
+            || ch == '+'
+            || ch == '='
+    });
 
     has_alpha && has_digit && safe_charset
 }
@@ -116,7 +136,7 @@ pub(crate) fn take_chars(value: &str, max_chars: usize) -> String {
 }
 
 pub(crate) fn chunk_text(value: &str, max_chars: usize) -> Vec<String> {
-    if value.trim().is_empty() {
+    if value.trim().is_empty() || max_chars == 0 {
         return Vec::new();
     }
 
@@ -126,15 +146,21 @@ pub(crate) fn chunk_text(value: &str, max_chars: usize) -> Vec<String> {
 
     for line in value.lines() {
         let line_count = line.chars().count() + 1;
-        if current_count > 0 && current_count + line_count > max_chars {
+        if current_count > 0 && line_count <= max_chars && current_count + line_count > max_chars {
             chunks.push(current.trim().to_string());
             current.clear();
             current_count = 0;
         }
 
-        current.push_str(line);
-        current.push('\n');
-        current_count += line_count;
+        for character in line.chars().chain(std::iter::once('\n')) {
+            if current_count == max_chars {
+                chunks.push(current.trim().to_string());
+                current.clear();
+                current_count = 0;
+            }
+            current.push(character);
+            current_count += 1;
+        }
     }
 
     if !current.trim().is_empty() {

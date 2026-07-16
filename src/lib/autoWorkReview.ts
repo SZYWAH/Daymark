@@ -11,14 +11,16 @@ import type {
   AiSettings,
   AutoWorkReviewCursor,
   AutoWorkReviewSettings,
+  CodexSessionIndex,
   ConversationSessionDelta,
   ConversationSourceKind,
   RollingWorkReview,
 } from "../types";
 import {
-  indexConversationSessions,
+  cancelConversationReviewJob,
   isDesktopRuntime,
   readConversationSessionDeltas,
+  scanConversationSessionsExact,
 } from "./desktop";
 import { getSafeErrorMessage } from "./redaction";
 
@@ -54,12 +56,24 @@ export async function runAutoWorkReviewOnce(options: RunAutoWorkReviewOptions): 
   await saveAutoWorkReviewSettings({ lastStatus: "running", lastMessage: "正在检查今日 AI 对话增量。" });
   try {
     const sourceKinds = normalizeSourceKinds(options.autoSettings.sourceKinds);
-    const sessions = await indexConversationSessions({
-      sourceKinds,
-      dateFrom: date,
-      dateTo: date,
-      limit: 800,
-    });
+    const scanJobId = createJobId();
+    const cancelScan = () => void cancelConversationReviewJob(scanJobId);
+    options.signal?.addEventListener("abort", cancelScan, { once: true });
+    let sessions: CodexSessionIndex[];
+    try {
+      const scanResult = await scanConversationSessionsExact(
+        {
+          sourceKinds,
+          dateFrom: date,
+          dateTo: date,
+          limit: 800,
+        },
+        scanJobId,
+      );
+      sessions = scanResult.sessions;
+    } finally {
+      options.signal?.removeEventListener("abort", cancelScan);
+    }
     if (sessions.length === 0) {
       const message = "今天还没有发现可用于自动回顾的 AI 对话。";
       await saveAutoWorkReviewSettings({ lastRunAt: formatTimestamp(), lastStatus: "success", lastMessage: message });
@@ -68,19 +82,35 @@ export async function runAutoWorkReviewOnce(options: RunAutoWorkReviewOptions): 
 
     const cursors = await getAutoWorkReviewCursorsBySessionIds(sessions.map((session) => session.id));
     const cursorMap = new Map(cursors.map((cursor) => [cursor.sessionId, cursor]));
-    const deltas = await readConversationSessionDeltas(
-      sessions.map((session) => session.id),
-      sessions.map((session) => ({
-        sessionId: session.id,
-        readOffset: cursorMap.get(session.id)?.readOffset ?? 0,
-      })),
-      createJobId(),
+    const readJobId = createJobId();
+    const cancelRead = () => void cancelConversationReviewJob(readJobId);
+    options.signal?.addEventListener("abort", cancelRead, { once: true });
+    let deltas: ConversationSessionDelta[];
+    try {
+      deltas = await readConversationSessionDeltas(
+        sessions.map((session) => session.id),
+        sessions.map((session) => ({
+          sessionId: session.id,
+          readOffset: cursorMap.get(session.id)?.readOffset ?? 0,
+        })),
+        readJobId,
+        { activityDateFrom: date, activityDateTo: date },
+      );
+    } finally {
+      options.signal?.removeEventListener("abort", cancelRead);
+    }
+    const skippedOversizedRecords = deltas.reduce(
+      (sum, delta) => sum + (delta.skippedOversizedRecordCount ?? 0),
+      0,
     );
+    const oversizedWarning = skippedOversizedRecords > 0
+      ? `有 ${skippedOversizedRecords} 条超过 32 MB 的单条会话记录未纳入回顾。`
+      : "";
     const usefulDeltas = deltas.filter((delta) => delta.transcript.trim() && delta.messageCount > 0);
 
     if (usefulDeltas.length === 0) {
       await upsertAutoWorkReviewCursors(buildCursorUpdates(deltas));
-      const message = "今天的 AI 对话暂无新增正文。";
+      const message = oversizedWarning || "今天的 AI 对话暂无新增正文。";
       await saveAutoWorkReviewSettings({ lastRunAt: formatTimestamp(), lastStatus: "success", lastMessage: message });
       return { status: "empty", message, deltas };
     }
@@ -117,7 +147,7 @@ export async function runAutoWorkReviewOnce(options: RunAutoWorkReviewOptions): 
       message: `已合并 ${usefulDeltas.length} 个会话增量。`,
     });
     await upsertAutoWorkReviewCursors(buildCursorUpdates(deltas));
-    const message = `已更新今日工作内容，合并 ${usefulDeltas.length} 个会话增量。`;
+    const message = `已更新今日工作内容，合并 ${usefulDeltas.length} 个会话增量。${oversizedWarning ? ` ${oversizedWarning}` : ""}`;
     await saveAutoWorkReviewSettings({ lastRunAt: formatTimestamp(), lastStatus: "success", lastMessage: message });
     return { status: "success", message, review, deltas };
   } catch (error) {

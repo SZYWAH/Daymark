@@ -13,10 +13,23 @@ import type {
   DailyConversationReview,
   Item,
   JournalEntry,
+  MemorySuggestionCheckpointV1,
+  ReviewGenerationTaskCheckpointV1,
   SummaryReport,
 } from "../types";
 import { resolveAiSettingsForRequest } from "../lib/aiSecrets";
+import {
+  shouldCreateMemorySuggestion,
+  updateMemorySuggestionCheckpoint,
+} from "../lib/memorySuggestion";
 import { getSafeErrorMessage } from "../lib/redaction";
+import {
+  classifyReviewRequestFailure,
+  createReviewSegmentId,
+  createReviewSettingsFingerprint,
+  getReviewCheckpointExpiry,
+  waitForReviewRetry,
+} from "../lib/reviewGenerationTask";
 import {
   type AiInputContentBlock,
   type AiInputMessage,
@@ -91,7 +104,12 @@ type OpenAiResponsesResponse = {
 type OpenAiResponsesStreamEvent = {
   type?: string;
   delta?: string;
+  text?: string;
+  item?: {
+    content?: Array<{ type?: string; text?: string }>;
+  };
   response?: OpenAiResponsesResponse;
+  choices?: ChatCompletionStreamChunk["choices"];
   error?: { message?: string };
 };
 
@@ -126,7 +144,10 @@ type AiRequestOptions = {
 
 const AI_REQUEST_TIMEOUT_MS = 90_000;
 const AI_STREAM_TIMEOUT_MS = 180_000;
-const ROLLING_REVIEW_CHUNK_CHARS = 14_000;
+const ROLLING_REVIEW_CHUNK_CHARS = 8_000;
+const REVIEW_CHUNK_TIMEOUT_MS = 120_000;
+const REVIEW_SYNTHESIS_MAX_SUMMARIES = 8;
+const REVIEW_COMPACTION_GROUP_SIZE = 8;
 
 export type AiActionResult = (
   | { action: "summarize"; aiSummary: string }
@@ -157,21 +178,47 @@ export type RollingWorkReviewUpdateInput = {
 export type CodexReviewProgressStage =
   | "读取会话"
   | "本地脱敏"
-  | "分块整理"
-  | "合成每日回顾"
-  | "提出记忆修改建议"
-  | "流式降级";
+  | "整理内容"
+  | "调整分段"
+  | "整理摘要"
+  | "生成回顾"
+  | "整理长期记忆建议"
+  | "分析长期记忆"
+  | "稳定完成";
 
 export type CodexReviewProgress = {
   stage: CodexReviewProgressStage;
   message: string;
   partialContent?: string;
+  indicator?: {
+    mode: "indeterminate" | "determinate" | "completed";
+    percent?: number;
+  };
+};
+
+export type ReviewGenerationTaskHooks = {
+  checkpoint: ReviewGenerationTaskCheckpointV1;
+  onCheckpoint: (checkpoint: ReviewGenerationTaskCheckpointV1) => Promise<void> | void;
+};
+
+export type ReviewChunkAttempt = {
+  chunk: string;
+  originalIndex: number;
+  originalTotal: number;
+  retryPart?: "a" | "b";
+};
+
+export type ReviewChunkProgress = {
+  kind: "summary" | "retry";
+  attempt: ReviewChunkAttempt;
+  completedCount: number;
 };
 
 export type MemoryPatchSuggestion = {
   title: string;
   rationale: string;
   proposedContent: string;
+  shouldCreate: boolean;
 };
 
 export type MemoryCandidateDraft = {
@@ -384,9 +431,9 @@ export async function summarizeCodexDay(
     throw new Error("这一天没有可用于回顾的 Codex 对话内容。");
   }
 
-  const chunkSummaries: string[] = [];
-  for (const [index, chunk] of chunks.entries()) {
-    const summary = await callDeepSeek(
+  const chunkSummaries = await summarizeReviewChunksWithTimeoutFallback(
+    chunks,
+    async (attempt) => callDeepSeek(
       settings,
       [
         {
@@ -396,13 +443,12 @@ export async function summarizeCodexDay(
         },
         {
           role: "user",
-          content: `日期：${input.date}\n片段：${index + 1}/${chunks.length}\n\n${chunk}`,
+          content: `日期：${input.date}\n片段：${formatReviewChunkLabel(attempt)}\n\n${attempt.chunk}`,
         },
       ],
-      { maxTokens: 1100 },
-    );
-    chunkSummaries.push(summary.trim());
-  }
+      { maxTokens: 1100, timeoutMs: REVIEW_CHUNK_TIMEOUT_MS },
+    ),
+  );
 
   const content = await callDeepSeek(
     settings,
@@ -423,10 +469,194 @@ export async function summarizeCodexDay(
   );
 
   const parsed = parseJsonObject(content);
+  const title = cleanTitle(String(parsed.title ?? `${input.date} Codex 回顾`));
+  const normalized = normalizeReviewOutput(String(parsed.content ?? content), title);
   return {
-    title: cleanTitle(String(parsed.title ?? `${input.date} Codex 回顾`)),
-    content: String(parsed.content ?? content).trim(),
+    title: normalized.title,
+    content: normalized.content,
   };
+}
+
+type ReviewCheckpointController = {
+  readonly current?: ReviewGenerationTaskCheckpointV1;
+  update: (patch: Partial<ReviewGenerationTaskCheckpointV1>) => Promise<void>;
+};
+
+function createReviewCheckpointController(taskHooks?: ReviewGenerationTaskHooks): ReviewCheckpointController {
+  let current = taskHooks?.checkpoint;
+  return {
+    get current() {
+      return current;
+    },
+    async update(patch) {
+      if (!current || !taskHooks) return;
+      current = { ...current, ...patch };
+      await taskHooks.onCheckpoint(current);
+    },
+  };
+}
+
+export async function runReliableReviewTextRequest(
+  request: () => Promise<string>,
+  options: {
+    signal?: AbortSignal;
+    onRetry?: (kind: "transient" | "split-worthy", retryIndex: number) => Promise<void> | void;
+    retryDelaysMs?: [number, number];
+  } = {},
+) {
+  let transientRetries = 0;
+  let splitWorthyRetries = 0;
+
+  while (true) {
+    if (options.signal?.aborted) throw new DOMException("已取消生成。", "AbortError");
+    try {
+      const result = (await request()).trim();
+      if (!result) throw new Error("AI 返回内容为空或格式不兼容。");
+      return result;
+    } catch (error) {
+      const kind = classifyReviewRequestFailure(error);
+      if (kind === "cancelled") throw error;
+      if (kind === "transient" && transientRetries < 2) {
+        const retryIndex = transientRetries;
+        transientRetries += 1;
+        await options.onRetry?.("transient", transientRetries);
+        const delays = options.retryDelaysMs ?? [2_000, 6_000];
+        await waitForReviewRetry(delays[retryIndex], options.signal);
+        continue;
+      }
+      if (kind === "split-worthy" && splitWorthyRetries < 1) {
+        splitWorthyRetries += 1;
+        await options.onRetry?.("split-worthy", splitWorthyRetries);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+async function summarizeConversationChunksWithCheckpoint(
+  chunks: string[],
+  input: ConversationReviewInput,
+  settings: AiSettings,
+  settingsFingerprint: string,
+  checkpoint: ReviewCheckpointController,
+  onProgress: (progress: CodexReviewProgress) => void,
+  signal?: AbortSignal,
+) {
+  const summaries: string[] = [];
+  const total = chunks.length;
+
+  const persistRetry = async () => {
+    await checkpoint.update({ retryCount: (checkpoint.current?.retryCount ?? 0) + 1 });
+  };
+  const summarizeAttempt = (attempt: ReviewChunkAttempt) => runReliableReviewTextRequest(
+    () => callDeepSeek(
+      settings,
+      [
+        {
+          role: "system",
+          content:
+            "你是 AI 对话整理助手。请把这一段对话压缩成中文阶段摘要，保留工作内容、关键决定、未完成事项和稳定偏好。正文中如出现“前序上下文，仅用于理解，不计入本次回顾”，只能将它用作背景，不得把其中已完成事项算入本次日期的成果。不要记录密钥、token、长路径、工具原始输出或一次性命令输出。",
+        },
+        {
+          role: "user",
+          content: `日期：${formatConversationActivityRange(input)}\n来源：${formatConversationSource(input)}\n片段：${formatReviewChunkLabel(attempt)}\n\n${attempt.chunk}`,
+        },
+      ],
+      { maxTokens: 1100, timeoutMs: REVIEW_CHUNK_TIMEOUT_MS, signal },
+    ),
+    { signal, onRetry: persistRetry },
+  );
+
+  for (const [index, chunk] of chunks.entries()) {
+    if (signal?.aborted) throw new DOMException("已取消生成。", "AbortError");
+    const attempt: ReviewChunkAttempt = { chunk, originalIndex: index, originalTotal: total };
+    const directId = await createReviewSegmentId("chunk", chunk, settingsFingerprint);
+    const direct = checkpoint.current?.chunkSummaries.find((item) => item.id === directId);
+    if (direct) {
+      summaries.push(direct.summary);
+      await checkpoint.update({ completedChunkCount: index + 1, stage: "summarizing" });
+      onProgress({ stage: "整理内容", message: `已恢复第 ${index + 1}/${total} 段。` });
+      continue;
+    }
+
+    const retryChunks = splitReviewChunkForRetry(chunk);
+    const retryIds = await Promise.all(retryChunks.map((part) => createReviewSegmentId("chunk", part, settingsFingerprint)));
+    const storedRetryParts = retryIds.map((id) => checkpoint.current?.chunkSummaries.find((item) => item.id === id));
+    if (retryChunks.length === 2 && storedRetryParts.every(Boolean)) {
+      summaries.push(...storedRetryParts.map((item) => item!.summary));
+      await checkpoint.update({ completedChunkCount: index + 1, stage: "summarizing" });
+      onProgress({ stage: "整理内容", message: `已恢复第 ${index + 1}/${total} 段的两个子段。` });
+      continue;
+    }
+
+    const hasPartialSplitCheckpoint = retryChunks.length === 2 && storedRetryParts.some(Boolean);
+    if (!hasPartialSplitCheckpoint) {
+      onProgress({ stage: "整理内容", message: `正在整理第 ${index + 1}/${total} 段。` });
+      try {
+        const summary = await summarizeAttempt(attempt);
+        const nextSummaries = [
+          ...(checkpoint.current?.chunkSummaries ?? []).filter((item) => item.id !== directId),
+          { id: directId, originalIndex: index, originalTotal: total, summary },
+        ];
+        summaries.push(summary);
+        await checkpoint.update({
+          stage: "summarizing",
+          completedChunkCount: index + 1,
+          chunkSummaries: nextSummaries,
+          lastError: undefined,
+        });
+        continue;
+      } catch (error) {
+        if (signal?.aborted || classifyReviewRequestFailure(error) !== "split-worthy") {
+          const detail = getSafeErrorMessage(error, "AI 请求失败。");
+          await checkpoint.update({ lastError: `分段整理第 ${index + 1}/${total} 段失败：${detail}` });
+          throw new Error(`分段整理第 ${index + 1}/${total} 段未完成。${detail}`);
+        }
+      }
+    } else {
+      onProgress({ stage: "调整分段", message: `正在从第 ${index + 1}/${total} 段未完成的子段继续。` });
+    }
+
+    if (!hasPartialSplitCheckpoint) {
+      onProgress({ stage: "调整分段", message: `第 ${index + 1}/${total} 段响应异常，正在拆分为两段。` });
+    }
+    if (retryChunks.length < 2) {
+      throw new Error(`分段整理第 ${index + 1}/${total} 段未完成，且无法继续拆分。`);
+    }
+    const partSummaries: string[] = [];
+    for (const [partIndex, retryChunk] of retryChunks.entries()) {
+      const retryPart = partIndex === 0 ? "a" : "b";
+      const retryId = retryIds[partIndex];
+      const stored = checkpoint.current?.chunkSummaries.find((item) => item.id === retryId);
+      if (stored) {
+        partSummaries.push(stored.summary);
+        continue;
+      }
+      const retryAttempt: ReviewChunkAttempt = { ...attempt, chunk: retryChunk, retryPart };
+      onProgress({ stage: "整理内容", message: `正在整理第 ${index + 1}/${total} 段的子段 ${retryPart}。` });
+      try {
+        const summary = await summarizeAttempt(retryAttempt);
+        partSummaries.push(summary);
+        await checkpoint.update({
+          stage: "summarizing",
+          chunkSummaries: [
+            ...(checkpoint.current?.chunkSummaries ?? []).filter((item) => item.id !== retryId),
+            { id: retryId, originalIndex: index, originalTotal: total, retryPart, summary },
+          ],
+          lastError: undefined,
+        });
+      } catch (error) {
+        const detail = getSafeErrorMessage(error, "AI 请求失败。");
+        await checkpoint.update({ lastError: `分段整理第 ${index + 1}/${total} 段的子段 ${retryPart} 失败：${detail}` });
+        throw new Error(`分段整理第 ${index + 1}/${total} 段的子段 ${retryPart} 未完成。${detail}`);
+      }
+    }
+    summaries.push(...partSummaries);
+    await checkpoint.update({ completedChunkCount: index + 1, stage: "summarizing" });
+  }
+
+  return summaries;
 }
 
 export async function streamSummarizeConversationReview(
@@ -434,43 +664,65 @@ export async function streamSummarizeConversationReview(
   settings: AiSettings,
   onProgress: (progress: CodexReviewProgress) => void,
   signal?: AbortSignal,
+  taskHooks?: ReviewGenerationTaskHooks,
 ): Promise<JournalSummaryResult> {
   const chunks = input.transcriptChunks.filter((chunk) => chunk.trim());
   if (chunks.length === 0) {
     throw new Error("这一天没有可用于回顾的 AI 对话内容。");
   }
 
+  const checkpoint = createReviewCheckpointController(taskHooks);
+  const settingsFingerprint = await createReviewSettingsFingerprint(settings);
+  const checkpointMatchesSettings = !checkpoint.current
+    || checkpoint.current.settingsFingerprint === settingsFingerprint;
+  await checkpoint.update({
+    settingsFingerprint,
+    stage: "summarizing",
+    totalChars: input.totalChars,
+    chunkCount: chunks.length,
+    completedChunkCount: checkpointMatchesSettings ? checkpoint.current?.completedChunkCount ?? 0 : 0,
+    chunkSummaries: checkpointMatchesSettings ? checkpoint.current?.chunkSummaries ?? [] : [],
+    compactionSummaries: checkpointMatchesSettings ? checkpoint.current?.compactionSummaries ?? [] : [],
+    compactionLevel: checkpointMatchesSettings ? checkpoint.current?.compactionLevel ?? 0 : 0,
+    compactionGroupIndex: checkpointMatchesSettings ? checkpoint.current?.compactionGroupIndex ?? 0 : 0,
+    finalTitle: checkpointMatchesSettings ? checkpoint.current?.finalTitle : undefined,
+    finalContent: checkpointMatchesSettings ? checkpoint.current?.finalContent : undefined,
+    lastError: undefined,
+  });
+
   onProgress({
     stage: "本地脱敏",
     message: input.redacted ? "已在本机替换疑似密钥与凭据。" : "未发现明显需要脱敏的内容。",
   });
 
-  const chunkSummaries: string[] = [];
-  for (const [index, chunk] of chunks.entries()) {
-    onProgress({
-      stage: "分块整理",
-      message: `正在整理第 ${index + 1}/${chunks.length} 段。`,
-    });
-    const summary = await callDeepSeek(
-      settings,
-      [
-        {
-          role: "system",
-          content:
-            "你是 AI 对话整理助手。请把这一段对话压缩成中文阶段摘要，保留工作内容、关键决定、未完成事项和稳定偏好。不要记录密钥、token、长路径、工具原始输出或一次性命令输出。",
-        },
-        {
-          role: "user",
-          content: `日期：${input.date}\n来源：${formatConversationSource(input)}\n片段：${index + 1}/${chunks.length}\n\n${chunk}`,
-        },
-      ],
-      { maxTokens: 1100, signal },
-    );
-    chunkSummaries.push(summary.trim());
-  }
+  const chunkSummaries = await summarizeConversationChunksWithCheckpoint(
+    chunks,
+    input,
+    settings,
+    settingsFingerprint,
+    checkpoint,
+    onProgress,
+    signal,
+  );
 
-  const messages = buildConversationReviewSynthesisMessages(input, chunkSummaries);
-  onProgress({ stage: "合成每日回顾", message: "正在写成一份可以细读的回顾。" });
+  const synthesisSummaries = await compactConversationReviewSummaries(
+    input,
+    chunkSummaries,
+    settings,
+    onProgress,
+    signal,
+    settingsFingerprint,
+    checkpoint,
+  );
+  const messages = buildConversationReviewSynthesisMessages(input, synthesisSummaries);
+  if (checkpoint.current?.finalTitle && checkpoint.current.finalContent) {
+    return {
+      title: checkpoint.current.finalTitle,
+      content: checkpoint.current.finalContent,
+    };
+  }
+  await checkpoint.update({ stage: "synthesizing", lastError: undefined });
+  onProgress({ stage: "生成回顾", message: "正在生成回顾。" });
 
   let streamed = "";
   try {
@@ -479,27 +731,54 @@ export async function streamSummarizeConversationReview(
       messages,
       (token, fullText) => {
         onProgress({
-          stage: "合成每日回顾",
+          stage: "生成回顾",
           message: "回顾正在生成。",
           partialContent: fullText,
         });
       },
       { maxTokens: 2200, signal },
     );
-  } catch (error) {
-    if (signal?.aborted) throw error;
+  } catch (streamError) {
+    if (signal?.aborted) throw streamError;
     onProgress({
-      stage: "流式降级",
-      message: "流式返回不稳定，已停止。本次不会自动重发对话内容；需要的话请手动重试。",
+      stage: "稳定完成",
+      message: "正在以稳定方式完成回顾。",
     });
-    throw new Error(formatStreamFailure(error, "AI 对话回顾生成中断，未自动重试。"));
+    try {
+      streamed = await runReliableReviewTextRequest(
+        () => callDeepSeek(settings, messages, {
+          maxTokens: 2200,
+          timeoutMs: AI_STREAM_TIMEOUT_MS,
+          signal,
+        }),
+        {
+          signal,
+          onRetry: async () => {
+            await checkpoint.update({ retryCount: (checkpoint.current?.retryCount ?? 0) + 1 });
+          },
+        },
+      );
+      onProgress({
+        stage: "生成回顾",
+        message: "回顾已生成。",
+        partialContent: streamed,
+      });
+    } catch (fallbackError) {
+      throw new Error(formatStreamFailure(
+        fallbackError,
+        "回顾未生成，当前回顾未被改写。可稍后重试。",
+      ));
+    }
   }
 
-  const content = stripCodeFence(streamed).trim();
-  return {
-    title: extractMarkdownTitle(content) || `${input.date} ${formatConversationSource(input)}回顾`,
-    content,
-  };
+  const normalized = normalizeReviewOutput(streamed, `${input.date} ${formatConversationSource(input)}回顾`);
+  await checkpoint.update({
+    stage: "memory-suggestion",
+    finalTitle: normalized.title,
+    finalContent: normalized.content,
+    lastError: undefined,
+  });
+  return normalized;
 }
 
 export async function streamUpdateRollingWorkReview(
@@ -525,12 +804,9 @@ export async function streamUpdateRollingWorkReview(
   if (chunks.length <= 1) {
     deltaContext.push(deltaText);
   } else {
-    for (const [index, chunk] of chunks.entries()) {
-      onProgress({
-        stage: "分块整理",
-        message: `正在整理新增片段 ${index + 1}/${chunks.length}。`,
-      });
-      const summary = await callDeepSeek(
+    deltaContext.push(...await summarizeReviewChunksWithTimeoutFallback(
+      chunks,
+      async (attempt) => callDeepSeek(
         settings,
         [
           {
@@ -540,33 +816,74 @@ export async function streamUpdateRollingWorkReview(
           },
           {
             role: "user",
-            content: `日期：${input.date}\n片段：${index + 1}/${chunks.length}\n\n${chunk}`,
+            content: `日期：${input.date}\n片段：${formatReviewChunkLabel(attempt)}\n\n${attempt.chunk}`,
           },
         ],
-        { maxTokens: 1000, signal },
-      );
-      deltaContext.push(summary.trim());
-    }
+        { maxTokens: 1000, timeoutMs: REVIEW_CHUNK_TIMEOUT_MS, signal },
+      ),
+      {
+        signal,
+        onProgress: (progress) => {
+          if (progress.kind === "retry") {
+            onProgress({
+            stage: "调整分段",
+              message: `第 ${formatReviewChunkLabel(progress.attempt)} 个新增片段响应较慢，正在拆分为两段。`,
+            });
+            return;
+          }
+          const retryLabel = progress.attempt.retryPart
+            ? `，正在重试子段 ${progress.attempt.retryPart}`
+            : "";
+          onProgress({
+          stage: "整理内容",
+            message: `正在整理新增片段 ${formatReviewChunkLabel(progress.attempt)}${retryLabel}。`,
+          });
+        },
+      },
+    ));
   }
 
-  onProgress({ stage: "合成每日回顾", message: "正在把新增内容合并进今日工作内容。" });
-  const streamed = await callDeepSeekStream(
-    settings,
-    buildRollingWorkReviewMessages(input, deltaContext),
-    (_token, fullText) => {
-      onProgress({
-        stage: "合成每日回顾",
-        message: "今日工作内容正在更新。",
-        partialContent: fullText,
+  onProgress({ stage: "生成回顾", message: "正在更新今日工作内容。" });
+  const messages = buildRollingWorkReviewMessages(input, deltaContext);
+  let streamed = "";
+  try {
+    streamed = await callDeepSeekStream(
+      settings,
+      messages,
+      (_token, fullText) => {
+        onProgress({
+          stage: "生成回顾",
+          message: "今日工作内容正在更新。",
+          partialContent: fullText,
+        });
+      },
+      { maxTokens: 2600, signal },
+    );
+  } catch (streamError) {
+    if (signal?.aborted) throw streamError;
+    onProgress({
+      stage: "稳定完成",
+      message: "正在以稳定方式更新今日工作内容。",
+    });
+    try {
+      streamed = await callDeepSeek(settings, messages, {
+        maxTokens: 2600,
+        timeoutMs: AI_STREAM_TIMEOUT_MS,
+        signal,
       });
-    },
-    { maxTokens: 2600, signal },
-  );
-  const content = stripCodeFence(streamed).trim();
-  return {
-    title: extractMarkdownTitle(content) || `${input.date} 今日工作内容`,
-    content,
-  };
+      onProgress({
+        stage: "生成回顾",
+        message: "今日工作内容已更新。",
+        partialContent: streamed,
+      });
+    } catch (fallbackError) {
+      throw new Error(formatStreamFailure(
+        fallbackError,
+        "今日工作内容未更新，已有内容保持不变。可稍后重试。",
+      ));
+    }
+  }
+  return normalizeReviewOutput(streamed, `${input.date} 今日工作内容`);
 }
 
 export async function streamSummarizeCodexReview(
@@ -587,39 +904,119 @@ export async function generateMemoryPatchFromReview(
   return streamGenerateMemoryPatchFromReview(review, currentMemory, settings, () => undefined, signal);
 }
 
+export type MemorySuggestionTaskHooks = {
+  readonly checkpoint: MemorySuggestionCheckpointV1;
+  onCheckpoint: (checkpoint: MemorySuggestionCheckpointV1) => Promise<void> | void;
+};
+
 export async function streamGenerateMemoryPatchFromReview(
   review: DailyConversationReview,
   currentMemory: string,
   settings: AiSettings,
   onProgress: (progress: CodexReviewProgress) => void,
   signal?: AbortSignal,
+  taskHooks?: MemorySuggestionTaskHooks,
 ): Promise<MemoryPatchSuggestion> {
-  onProgress({ stage: "提出记忆修改建议", message: "正在对照长期记忆文档，生成少而准的画像更新。" });
-  let content = "";
+  let checkpoint = taskHooks?.checkpoint;
+  const persistCheckpoint = async (patch: Partial<MemorySuggestionCheckpointV1>) => {
+    if (!checkpoint || !taskHooks) return;
+    checkpoint = updateMemorySuggestionCheckpoint(checkpoint, patch);
+    await taskHooks.onCheckpoint(checkpoint);
+  };
+  const messages = buildMemoryPatchMessages(review, currentMemory);
+  onProgress({ stage: "分析长期记忆", message: "正在分析长期记忆建议。" });
+
+  let streamError: unknown;
   try {
-    content = await callDeepSeekStream(
+    await persistCheckpoint({
+      status: "running",
+      executionMode: "stream",
+      attemptCount: (checkpoint?.attemptCount ?? 0) + 1,
+      lastError: undefined,
+    });
+    const content = await callDeepSeekStream(
       settings,
-      buildMemoryPatchMessages(review, currentMemory),
+      messages,
       (_token, fullText) => {
         onProgress({
-          stage: "提出记忆修改建议",
-          message: "记忆修改建议正在生成。",
+          stage: "分析长期记忆",
+          message: "正在生成长期记忆建议。",
           partialContent: fullText,
         });
       },
       { maxTokens: 2600, signal },
     );
+    return parseMemoryPatchSuggestion(content, currentMemory);
   } catch (error) {
     if (signal?.aborted) throw error;
-    onProgress({ stage: "流式降级", message: "记忆建议流式返回不稳定，已停止。本次不会自动重发长期记忆内容；需要的话请手动重试。" });
-    throw new Error(formatStreamFailure(error, "记忆建议生成中断，未自动重试。"));
+    const kind = classifyReviewRequestFailure(error);
+    await persistCheckpoint({
+      lastError: getSafeErrorMessage(error, "长期记忆建议暂未完成。"),
+    });
+    if (kind === "cancelled" || kind === "configuration" || kind === "fatal") throw error;
+    streamError = error;
   }
 
-  const parsed = parseJsonObject(content);
+  onProgress({ stage: "分析长期记忆", message: "流式生成未完成，正在以稳定方式重试。" });
+  let lastError = streamError;
+  const retryDelays = [0, 2_000, 6_000] as const;
+  for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+    if (signal?.aborted) throw new DOMException("已取消生成。", "AbortError");
+    if (retryDelays[attempt] > 0) {
+      await persistCheckpoint({ retryCount: (checkpoint?.retryCount ?? 0) + 1 });
+      await waitForReviewRetry(retryDelays[attempt], signal);
+    }
+    await persistCheckpoint({
+      status: "running",
+      executionMode: "non-stream",
+      attemptCount: (checkpoint?.attemptCount ?? 0) + 1,
+      lastError: undefined,
+    });
+    try {
+      const content = await callDeepSeek(settings, messages, {
+        maxTokens: 2600,
+        timeoutMs: AI_STREAM_TIMEOUT_MS,
+        signal,
+      });
+      return parseMemoryPatchSuggestion(content, currentMemory);
+    } catch (error) {
+      lastError = error;
+      await persistCheckpoint({
+        lastError: getSafeErrorMessage(error, "长期记忆建议暂未完成。"),
+      });
+      const kind = classifyReviewRequestFailure(error);
+      if (kind === "cancelled" || kind === "configuration" || kind === "fatal") throw error;
+      if (attempt === retryDelays.length - 1) throw error;
+      onProgress({
+        stage: "分析长期记忆",
+        message: `长期记忆建议暂未完成，正在进行第 ${attempt + 1} 次重试。`,
+      });
+    }
+  }
+  throw lastError;
+}
+
+function parseMemoryPatchSuggestion(content: string, currentMemory: string): MemoryPatchSuggestion {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseJsonObject(content);
+  } catch {
+    throw new Error("AI 返回内容为空或格式不兼容。");
+  }
+  const action = String(parsed.action ?? "").trim().toLowerCase();
+  if (action !== "create" && action !== "none") {
+    throw new Error("AI 返回内容为空或格式不兼容。");
+  }
+  const proposedContent = String(parsed.proposedContent ?? "").trim();
+  if (action === "create" && !proposedContent) {
+    throw new Error("AI 返回内容为空或格式不兼容。");
+  }
+  const shouldCreate = shouldCreateMemorySuggestion(action, proposedContent || currentMemory, currentMemory);
   return {
-    title: cleanTitle(String(parsed.title ?? "记忆修改建议")) || "记忆修改建议",
-    rationale: String(parsed.rationale ?? "根据这次 AI 对话回顾整理出的长期记忆修改建议。").trim(),
-    proposedContent: String(parsed.proposedContent ?? currentMemory).trim() || currentMemory,
+    title: cleanTitle(String(parsed.title ?? "长期记忆建议")) || "长期记忆建议",
+    rationale: String(parsed.rationale ?? (shouldCreate ? "根据本次回顾整理出的长期记忆建议。" : "本次未发现需要长期保留的新信息。")).trim(),
+    proposedContent: shouldCreate ? proposedContent : currentMemory,
+    shouldCreate,
   };
 }
 
@@ -648,27 +1045,23 @@ export async function streamSynthesizeCombinedDailyReview(
     },
   ];
 
-  onProgress({ stage: "合成每日回顾", message: "正在把多个来源合成一份今日总回顾。" });
+  onProgress({ stage: "生成回顾", message: "正在生成今日回顾。" });
   let streamed = "";
   try {
     streamed = await callDeepSeekStream(
       settings,
       messages,
       (_token, fullText) =>
-        onProgress({ stage: "合成每日回顾", message: "综合回顾正在生成。", partialContent: fullText }),
+        onProgress({ stage: "生成回顾", message: "今日回顾正在生成。", partialContent: fullText }),
       { maxTokens: 2200, signal },
     );
   } catch (error) {
     if (signal?.aborted) throw error;
-    onProgress({ stage: "流式降级", message: "综合回顾流式返回不稳定，已停止。本次不会自动重发回顾内容；需要的话请手动重试。" });
-    throw new Error(formatStreamFailure(error, "综合回顾生成中断，未自动重试。"));
+    onProgress({ stage: "稳定完成", message: "今日回顾未生成，当前回顾未被改写。可稍后重试。" });
+    throw new Error(formatStreamFailure(error, "今日回顾未生成，当前回顾未被改写。可稍后重试。"));
   }
 
-  const content = stripCodeFence(streamed).trim();
-  return {
-    title: extractMarkdownTitle(content) || `${date} 今日总回顾`,
-    content,
-  };
+  return normalizeReviewOutput(streamed, `${date} 今日总回顾`);
 }
 
 export async function extractCodexMemoryCandidates(
@@ -1001,10 +1394,16 @@ export function extractBrowserStreamToken(
       throw new Error(responses.response?.incomplete_details?.reason || "Responses request was incomplete.");
     }
     if (responses.type === "response.output_text.delta") return responses.delta ?? "";
+    if (responses.type === "response.output_text.done" && !hasText) {
+      return responses.text ?? responses.delta ?? "";
+    }
+    if (responses.type === "response.output_item.done" && !hasText && responses.item) {
+      return extractResponsesContent({ output: [responses.item] }) ?? "";
+    }
     if (responses.type === "response.completed" && !hasText && responses.response) {
       return extractResponsesContent(responses.response) ?? "";
     }
-    return "";
+    return responses.choices?.[0]?.delta?.content ?? "";
   }
   return (event as ChatCompletionStreamChunk).choices?.[0]?.delta?.content ?? "";
 }
@@ -1191,16 +1590,243 @@ function buildCodexReviewSynthesisMessages(input: CodexReviewInput, chunkSummari
   return buildConversationReviewJsonMessages(input, chunkSummaries);
 }
 
+export function isRetryableReviewChunkTimeout(error: unknown) {
+  if (error instanceof DOMException && error.name === "TimeoutError") return true;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /(?:AI 请求超时|请求超过\s*\d+\s*秒仍未返回|TimeoutError)/i.test(message);
+}
+
+export function splitReviewChunkForRetry(value: string) {
+  const chars = Array.from(value);
+  if (chars.length < 2) return [value];
+  const midpoint = Math.ceil(chars.length / 2);
+  return [
+    chars.slice(0, midpoint).join(""),
+    chars.slice(midpoint).join(""),
+  ].filter((chunk) => chunk.trim());
+}
+
+export async function summarizeReviewChunksWithTimeoutFallback(
+  chunks: string[],
+  summarizeChunk: (attempt: ReviewChunkAttempt) => Promise<string>,
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (progress: ReviewChunkProgress) => void;
+  } = {},
+): Promise<string[]> {
+  const summaries: string[] = [];
+  const total = chunks.length;
+
+  for (const [index, chunk] of chunks.entries()) {
+    const attempt: ReviewChunkAttempt = {
+      chunk,
+      originalIndex: index,
+      originalTotal: total,
+    };
+    options.onProgress?.({ kind: "summary", attempt, completedCount: summaries.length });
+
+    try {
+      const summary = (await summarizeChunk(attempt)).trim();
+      if (!summary) throw new Error("AI 返回内容为空或格式不兼容。");
+      summaries.push(summary);
+      continue;
+    } catch (error) {
+      if (options.signal?.aborted || !isRetryableReviewChunkTimeout(error)) throw error;
+    }
+
+    options.onProgress?.({ kind: "retry", attempt, completedCount: summaries.length });
+    const retryChunks = splitReviewChunkForRetry(chunk);
+    if (retryChunks.length < 2) {
+      throw new Error(
+        `第 ${formatReviewChunkLabel(attempt)} 段请求超时，且无法继续拆分；本次生成中已完成 ${summaries.length} 段。请检查连接后重试。`,
+      );
+    }
+
+    for (const [retryIndex, retryChunk] of retryChunks.entries()) {
+      const retryAttempt: ReviewChunkAttempt = {
+        ...attempt,
+        chunk: retryChunk,
+        retryPart: retryIndex === 0 ? "a" : "b",
+      };
+      options.onProgress?.({ kind: "summary", attempt: retryAttempt, completedCount: summaries.length });
+      try {
+        const summary = (await summarizeChunk(retryAttempt)).trim();
+        if (!summary) throw new Error("AI 返回内容为空或格式不兼容。");
+        summaries.push(summary);
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
+        const detail = getSafeErrorMessage(error, "AI 请求失败。");
+        throw new Error(
+          `第 ${formatReviewChunkLabel(attempt)} 段拆分后仍未完成；本次生成中已完成 ${summaries.length} 段。请检查连接后重试。原因：${detail}`,
+        );
+      }
+    }
+  }
+
+  return summaries;
+}
+
+function formatReviewChunkLabel(attempt: ReviewChunkAttempt) {
+  const base = `${attempt.originalIndex + 1}/${attempt.originalTotal}`;
+  return attempt.retryPart ? `${base}（${attempt.retryPart}）` : base;
+}
+
+async function requestCompactionSummary(
+  input: ConversationReviewInput,
+  content: string,
+  label: string,
+  settings: AiSettings,
+  signal: AbortSignal | undefined,
+  onRetry: () => Promise<void>,
+  onSplit: () => void,
+) {
+  const request = (part: string, partLabel = label) => runReliableReviewTextRequest(
+    () => callDeepSeek(
+      settings,
+      [
+        {
+          role: "system",
+          content:
+            "你正在压缩同一天 AI 对话的阶段摘要。请合并重复信息，保留具体完成事项、进行中的工作、关键决策、问题风险、待办和可沉淀线索。不要把跨日前序上下文中的旧成果计入当天，也不要记录密钥、token、原始路径、命令输出或工具日志。输出中文要点即可。",
+        },
+        {
+          role: "user",
+          content: [
+            `日期：${formatConversationActivityRange(input)}`,
+            `来源：${formatConversationSource(input)}`,
+            `摘要组：${partLabel}`,
+            "",
+            part,
+          ].join("\n"),
+        },
+      ],
+      { maxTokens: 1200, timeoutMs: REVIEW_CHUNK_TIMEOUT_MS, signal },
+    ),
+    { signal, onRetry },
+  );
+
+  try {
+    return await request(content);
+  } catch (error) {
+    if (signal?.aborted || classifyReviewRequestFailure(error) !== "split-worthy") throw error;
+    const parts = splitReviewChunkForRetry(content);
+    if (parts.length < 2) throw error;
+    onSplit();
+    const summaries: string[] = [];
+    for (const [index, part] of parts.entries()) {
+      summaries.push(await request(part, `${label} 子段 ${index === 0 ? "a" : "b"}`));
+    }
+    return summaries.join("\n\n");
+  }
+}
+
+async function compactConversationReviewSummaries(
+  input: ConversationReviewInput,
+  summaries: string[],
+  settings: AiSettings,
+  onProgress: (progress: CodexReviewProgress) => void,
+  signal?: AbortSignal,
+  settingsFingerprint?: string,
+  checkpoint?: ReviewCheckpointController,
+) {
+  let current = summaries.filter((summary) => summary.trim());
+  let level = 1;
+
+  while (current.length > REVIEW_SYNTHESIS_MAX_SUMMARIES) {
+    const groups = groupReviewSummaries(current, REVIEW_COMPACTION_GROUP_SIZE);
+    const compacted: string[] = [];
+
+    for (const [index, group] of groups.entries()) {
+      if (signal?.aborted) throw new DOMException("已取消生成。", "AbortError");
+      const groupContent = group.join("\n\n---\n\n");
+      const groupId = settingsFingerprint
+        ? await createReviewSegmentId("compaction", `level:${level}\ngroup:${index}\n${groupContent}`, settingsFingerprint)
+        : "";
+      const restored = groupId
+        ? checkpoint?.current?.compactionSummaries.find((item) => item.id === groupId)
+        : undefined;
+      if (restored) {
+        compacted.push(restored.summary);
+        await checkpoint?.update({
+          stage: "compacting",
+          compactionLevel: level,
+          compactionGroupIndex: index + 1,
+        });
+        onProgress({
+          stage: "整理摘要",
+          message: `已恢复第 ${level} 层摘要 ${index + 1}/${groups.length}。`,
+        });
+        continue;
+      }
+      onProgress({
+        stage: "整理摘要",
+        message: `正在压缩第 ${level} 层摘要 ${index + 1}/${groups.length}，避免最终请求过大。`,
+      });
+      try {
+        const summary = await requestCompactionSummary(
+          input,
+          group.map((item, itemIndex) => `【阶段摘要 ${itemIndex + 1}】\n${item}`).join("\n\n---\n\n"),
+          `第 ${level} 层 ${index + 1}/${groups.length}`,
+          settings,
+          signal,
+          async () => {
+            await checkpoint?.update({ retryCount: (checkpoint.current?.retryCount ?? 0) + 1 });
+          },
+          () => onProgress({
+            stage: "调整分段",
+            message: `第 ${level} 层摘要 ${index + 1}/${groups.length} 响应异常，正在拆分处理。`,
+          }),
+        );
+        compacted.push(summary);
+        if (groupId) {
+          await checkpoint?.update({
+            stage: "compacting",
+            compactionLevel: level,
+            compactionGroupIndex: index + 1,
+            compactionSummaries: [
+              ...(checkpoint.current?.compactionSummaries ?? []).filter((item) => item.id !== groupId),
+              { id: groupId, level, groupIndex: index, groupTotal: groups.length, summary },
+            ],
+            lastError: undefined,
+          });
+        }
+      } catch (error) {
+        const detail = getSafeErrorMessage(error, "AI 请求失败。");
+        await checkpoint?.update({
+          stage: "compacting",
+          compactionLevel: level,
+          compactionGroupIndex: index,
+          lastError: `阶段压缩第 ${level} 层第 ${index + 1}/${groups.length} 组失败：${detail}`,
+        });
+        throw new Error(`阶段压缩第 ${level} 层第 ${index + 1}/${groups.length} 组未完成。${detail}`);
+      }
+    }
+
+    current = compacted;
+    level += 1;
+  }
+
+  return current;
+}
+
+function groupReviewSummaries(summaries: string[], groupSize: number) {
+  const groups: string[][] = [];
+  for (let index = 0; index < summaries.length; index += groupSize) {
+    groups.push(summaries.slice(index, index + groupSize));
+  }
+  return groups;
+}
+
 function buildConversationReviewSynthesisMessages(input: ConversationReviewInput, chunkSummaries: string[]): ChatMessage[] {
   return [
     {
       role: "system",
       content:
-        "你是一个安静、克制的个人工作回顾编辑。请直接输出 Markdown 正文，不要输出 JSON，不要包代码块。结构固定为：## 今日做了什么、## 关键决定、## 还悬着的事、## 值得沉淀的线索。内容要具体，少写空泛鸡汤；不要记录密钥、token、一次性路径、工具原始输出或命令输出。",
+        "你是一个安静、克制的个人工作回顾编辑。请直接输出 Markdown 正文，不要输出 JSON，不要包代码块。结构固定为：## 今日做了什么、## 关键决定、## 还悬着的事、## 值得沉淀的线索。内容要具体，少写空泛鸡汤。若阶段摘要来自跨日会话，前序上下文只用于理解，绝不能把其中昨天已完成的事项计入本次日期成果；只总结标记为本次活动日期的正文。不要记录密钥、token、一次性路径、工具原始输出或命令输出。",
     },
     {
       role: "user",
-      content: `日期：${input.date}\n来源：${formatConversationSource(input)}\n会话数：${input.sessions.length}\n内容已脱敏：${input.redacted ? "是" : "否"}\n内容已截断：${input.truncated ? "是" : "否"}\n\n阶段摘要：\n${chunkSummaries
+      content: `日期：${formatConversationActivityRange(input)}\n来源：${formatConversationSource(input)}\n会话数：${input.sessions.length}\n内容已脱敏：${input.redacted ? "是" : "否"}\n内容已截断：${input.truncated ? "是" : "否"}\n\n阶段摘要：\n${chunkSummaries
         .map((summary, index) => `【片段 ${index + 1}】\n${summary}`)
         .join("\n\n---\n\n")}\n\n请只输出 Markdown 正文。`,
     },
@@ -1213,7 +1839,7 @@ function buildRollingWorkReviewMessages(input: RollingWorkReviewUpdateInput, del
     {
       role: "system",
       content:
-        "你正在维护一份当天工作内容记录。请基于“当前版本”和“新增对话片段”更新同一份 Markdown 文档，不要另起一份总结。保留已准确内容，合并重复事项，删除明显过时的进行中状态，不编造新增对话里没有的信息。固定使用这些二级标题：已完成、正在进行、关键决策、问题与风险、待办、可沉淀为长期记忆的候选。不要记录密钥、token、临时路径或原始命令输出。",
+        "你正在维护一份当天工作内容记录。请基于“当前版本”和“新增对话片段”更新同一份 Markdown 文档，不要另起一份总结。保留已准确内容，合并重复事项，删除明显过时的进行中状态，不编造新增对话里没有的信息。片段中若出现“前序上下文，仅用于理解”标记，其中内容只能用于理解当前工作的背景，绝不能计入当天的已完成、决策或待办。固定使用这些二级标题：已完成、正在进行、关键决策、问题与风险、待办、可沉淀为长期记忆的候选。不要记录密钥、token、临时路径或原始命令输出。",
     },
     {
       role: "user",
@@ -1238,16 +1864,19 @@ function buildRollingWorkReviewMessages(input: RollingWorkReviewUpdateInput, del
 }
 
 function formatRollingWorkDelta(delta: ConversationSessionDelta) {
-  return [
+  const parts = [
     `来源：${delta.sourceLabel}`,
     `日期：${delta.date}`,
     `会话：${delta.sessionId}`,
     `新增消息：${delta.messageCount}`,
     `已脱敏：${delta.redacted ? "是" : "否"}`,
     `已截断：${delta.truncated ? "是" : "否"}`,
-    "",
-    delta.transcript,
-  ].join("\n");
+  ];
+  if (delta.contextTranscript.trim()) {
+    parts.push("", "前序上下文，仅用于理解，不计入今日工作：", delta.contextTranscript.trim());
+  }
+  parts.push("", "本次活动日期的新增正文：", delta.transcript);
+  return parts.join("\n");
 }
 
 function buildConversationReviewJsonMessages(input: ConversationReviewInput, chunkSummaries: string[]): ChatMessage[] {
@@ -1255,11 +1884,11 @@ function buildConversationReviewJsonMessages(input: ConversationReviewInput, chu
     {
       role: "system",
       content:
-        "你是个人工作/聊天回顾助手。请输出 JSON 对象，字段为 title 和 content。content 使用中文，语气安静克制，结构固定为：今日做了什么、关键决定、还悬着的事、值得沉淀的线索。不要写空泛鸡汤，不要记录密钥、token、一次性路径或命令输出。",
+        "你是个人工作/聊天回顾助手。请输出 JSON 对象，字段为 title 和 content。content 使用中文，语气安静克制，结构固定为：今日做了什么、关键决定、还悬着的事、值得沉淀的线索。跨日会话的前序上下文只能用于理解，不得算作本次日期成果。不要写空泛鸡汤，不要记录密钥、token、一次性路径或命令输出。",
     },
     {
       role: "user",
-      content: `日期：${input.date}\n来源：${formatConversationSource(input)}\n会话数：${input.sessions.length}\n内容已脱敏：${input.redacted ? "是" : "否"}\n内容已截断：${input.truncated ? "是" : "否"}\n\n阶段摘要：\n${chunkSummaries
+      content: `日期：${formatConversationActivityRange(input)}\n来源：${formatConversationSource(input)}\n会话数：${input.sessions.length}\n内容已脱敏：${input.redacted ? "是" : "否"}\n内容已截断：${input.truncated ? "是" : "否"}\n\n阶段摘要：\n${chunkSummaries
         .map((summary, index) => `【片段 ${index + 1}】\n${summary}`)
         .join("\n\n---\n\n")}\n\n只输出 JSON。`,
     },
@@ -1271,11 +1900,11 @@ function buildMemoryPatchMessages(review: DailyConversationReview, currentMemory
     {
       role: "system",
       content:
-        "你是长期记忆文档编辑。请像 GPT 记忆那样维护一份第三人称、分节、可长期复用的用户画像文档。不要生成孤立卡片。只保留长期稳定信息：偏好、项目方向、工具习惯、设计原则、长期约束、反复出现的工作方式。明确排除临时报错、一次性命令、路径碎片、密钥、token、无上下文结论、当天情绪噪声。输出 JSON 对象，字段为 title、rationale、proposedContent。proposedContent 必须是完整长期记忆文档，正文不写来源日期。",
+        "你是长期记忆文档编辑。请像 GPT 记忆那样维护一份第三人称、分节、可长期复用的用户画像文档。不要生成孤立卡片。只保留长期稳定信息：偏好、项目方向、工具习惯、设计原则、长期约束、反复出现的工作方式。明确排除临时报错、一次性命令、路径碎片、密钥、token、无上下文结论、当天情绪噪声。输出 JSON 对象，字段为 action、title、rationale、proposedContent。发现值得长期保留的新信息时 action 为 create，proposedContent 必须是合并后的完整长期记忆文档；没有新增长期信息时 action 为 none，并保持 proposedContent 与当前长期记忆一致。正文不写来源日期。",
     },
     {
       role: "user",
-      content: `当前长期记忆文档：\n${currentMemory || "（暂时为空）"}\n\n本次回顾来源：${review.sourceLabel}\n日期：${review.date}\n标题：${review.title}\n正文：\n${review.content}\n\n请给出少而准的修改。如果没有值得留下的长期记忆，保持原文档基本不变，并在 rationale 中说明原因。只输出 JSON。`,
+      content: `当前长期记忆文档：\n${currentMemory || "（暂时为空）"}\n\n本次回顾来源：${review.sourceLabel}\n日期：${review.date}\n标题：${review.title}\n正文：\n${review.content}\n\n请给出简洁且准确的修改。如果没有值得留下的长期记忆，保持原文档基本不变，并在 rationale 中说明原因。只输出 JSON。`,
     },
   ];
 }
@@ -1395,11 +2024,36 @@ function extractMarkdownTitle(value: string) {
   return cleanTitle(firstHeading.replace(/^#+\s*/, ""));
 }
 
+function normalizeReviewOutput(value: string, fallbackTitle: string): JournalSummaryResult {
+  const content = stripCodeFence(value).trim();
+  const title = extractMarkdownTitle(content) || fallbackTitle;
+  const lines = content.split(/\r?\n/);
+  const firstContentLine = lines.findIndex((line) => line.trim().length > 0);
+  if (firstContentLine < 0 || !lines[firstContentLine].trim().startsWith("#")) {
+    return { title, content };
+  }
+
+  const heading = cleanTitle(lines[firstContentLine].replace(/^#+\s*/, ""));
+  if (!heading || heading !== cleanTitle(title)) return { title, content };
+
+  const withoutRepeatedTitle = lines.slice(firstContentLine + 1).join("\n").trim();
+  return { title, content: withoutRepeatedTitle || content };
+}
+
 function formatConversationSource(input: Pick<ConversationReviewInput, "reviewKind" | "sourceKinds">) {
   if (input.reviewKind === "combined") return "综合";
   if (input.sourceKinds.includes("claude") && input.sourceKinds.includes("codex")) return "AI 对话";
   if (input.sourceKinds.includes("claude")) return "Claude Code";
   return "Codex";
+}
+
+function formatConversationActivityRange(input: Pick<ConversationReviewInput, "date" | "activityDateFrom" | "activityDateTo">) {
+  if (input.activityDateFrom && input.activityDateTo) {
+    return input.activityDateFrom === input.activityDateTo
+      ? input.activityDateFrom
+      : `${input.activityDateFrom} 至 ${input.activityDateTo}`;
+  }
+  return input.activityDateFrom || input.activityDateTo || input.date;
 }
 
 function formatSourceKindList(sourceKinds: ConversationSourceKind[]) {

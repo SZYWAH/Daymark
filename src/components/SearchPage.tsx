@@ -146,7 +146,7 @@ export function SearchPage({ onOpenResult, refreshKey = 0 }: SearchPageProps) {
             fill
             title="搜索结果"
             count={error ? "出错" : query.trim() ? `${totalCount} 条` : "等待关键词"}
-            status={error || (loading ? "正在寻找" : query.trim() ? "按相关页面归拢" : "")}
+            status={error || (loading ? "正在搜索" : query.trim() ? "按内容类型显示" : "")}
             bodyClassName="space-y-4 p-3"
             empty={
               error ? (

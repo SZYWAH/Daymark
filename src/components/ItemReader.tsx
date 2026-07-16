@@ -444,7 +444,7 @@ function ReaderWorkbench({
             }}
           >
             <Sparkles size={14} />
-            {aiRunningAction ? "处理中" : "整理 / AI"}
+            {aiRunningAction ? "处理中" : "AI 整理"}
           </button>
           {aiRunningAction && (
             <button className="soft-button action-compact" type="button" onClick={onCancelAiAction}>
@@ -534,12 +534,12 @@ function ReaderWorkbench({
                     );
                   })}
                 </div>
-                <p className="mt-2 text-xs leading-5 text-ink/42">手动触发；读取与发送范围会在结果中回执。</p>
+                <p className="mt-2 text-xs leading-5 text-ink/42">手动触发；处理范围会显示在处理记录中。</p>
               </div>
             )}
           </div>
           <div className="mt-2 flex items-center justify-between gap-2 border-t border-line/60 pt-2">
-            <span className="text-xs text-ink/38">危险操作会再次确认。</span>
+            <span className="text-xs text-ink/38">删除前会要求确认。</span>
             <button className="danger-action action-compact" onClick={onDelete} title="删除资料" aria-label="删除资料">
               <Trash2 size={15} />
               删除资料
@@ -710,7 +710,7 @@ function AiResultPanel({ state, resultPersisted = false }: { state: AiRunDisplay
       {receiptSummary && <div className="mb-3 rounded-[8px] border border-line bg-panel/70 px-3 py-2 text-xs leading-5 text-ink/66">{receiptSummary}</div>}
       <p className="text-xs leading-5 text-ink/56">{state.message}</p>
       {resultPersisted && (
-        <p className="mt-2 text-xs leading-5 text-ink/48">本次总结已写入资料的 AI 摘要区，回执仅保留提取、发送和返回长度。</p>
+        <p className="mt-2 text-xs leading-5 text-ink/48">AI 摘要已写入资料；处理记录仅显示读取、发送和返回统计。</p>
       )}
       {resultText && (
         <p className={`${expanded ? "max-h-[360px] overflow-y-auto whitespace-pre-wrap pr-2 scrollbar-thin" : "line-clamp-6"} mt-3 text-anywhere text-sm leading-6 text-ink/66`}>
@@ -815,7 +815,7 @@ function formatAiReceiptSummary(receipt: AiRunReceipt) {
   } else {
     parts.push(
       receipt.fileName
-        ? "已读取非文本资料输入，本次回执不按正文字符统计"
+        ? "已读取非文本资料输入，处理记录不按正文字符统计"
         : "本次操作使用资料库现有内容，没有读取本地文件正文",
       outputPart,
     );
