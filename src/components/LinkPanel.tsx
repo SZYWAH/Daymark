@@ -4,9 +4,9 @@ import { BoundedPreview, ResultRow, ScrollableResultPanel } from "./ResultPanels
 import { ConfirmDialog } from "./ConfirmDialog";
 import { getSafeErrorMessage } from "../lib/redaction";
 import { getVisibleDailyReviewLibraryItems } from "../lib/reviewLibraryPublication";
-import type { EntityKind, Item, JournalEntry, KnowledgeLink, MemoryCard, SummaryReport } from "../types";
+import type { EntityKind, Item, JournalEntry, KnowledgeLink, ManualKnowledgeLinkInput, MemoryCard, SummaryReport } from "../types";
 
-type LinkInput = Omit<KnowledgeLink, "id" | "createdAt">;
+type LinkInput = ManualKnowledgeLinkInput;
 
 type LinkPanelProps = {
   entityKind: EntityKind;
@@ -75,11 +75,11 @@ export function LinkPanel({
 
   const relatedLinks = useMemo(
     () =>
-      links.filter(
-        (link) =>
-          (link.sourceKind === entityKind && link.sourceId === entityId) ||
-          (link.targetKind === entityKind && link.targetId === entityId),
-      ),
+      links.filter((link) => {
+        if ((link.linkKind ?? "manual") !== "manual") return false;
+        return (link.sourceKind === entityKind && link.sourceId === entityId)
+          || (link.targetKind === entityKind && link.targetId === entityId);
+      }),
     [entityId, entityKind, links],
   );
 

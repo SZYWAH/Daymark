@@ -965,6 +965,18 @@ button {
     @apply font-medium text-copper underline decoration-copper/25 underline-offset-4 transition hover:decoration-copper;
   }
 
+  .markdown-item-reference {
+    @apply inline-flex items-baseline rounded-[4px] border border-copper/30 bg-copper/10 px-1 py-0.5 text-left font-medium text-copper transition-colors;
+  }
+
+  button.markdown-item-reference:hover {
+    @apply border-copper/55 bg-copper/15 text-ink;
+  }
+
+  .markdown-item-reference-disabled {
+    @apply cursor-default border-dashed border-line bg-panel/70 text-ink/40 no-underline;
+  }
+
   .markdown-link-blocked {
     @apply cursor-not-allowed border-b border-dotted border-ink/25 text-ink/50;
   }
@@ -1047,6 +1059,18 @@ button {
 
   .markdown-tool-button {
     @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] border border-transparent text-ink/50 transition hover:border-line hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .markdown-reference-picker {
+    @apply absolute z-30 max-h-[280px] w-[min(310px,calc(100%-16px))] overflow-y-auto rounded-[8px] border border-line bg-paper shadow-xl;
+  }
+
+  .markdown-reference-picker > button {
+    @apply flex w-full min-w-0 flex-col gap-0.5 border-b border-line/70 px-3 py-2 text-left last:border-b-0 hover:bg-copper/10;
+  }
+
+  .markdown-reference-picker > button.is-active {
+    @apply bg-copper/10;
   }
 
   .markdown-source {

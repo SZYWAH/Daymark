@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { MarkdownContent } from "./MarkdownContent";
+import type { Item } from "../types";
 
 describe("MarkdownContent", () => {
   it("renders CommonMark, GFM, footnotes, and legacy line breaks", () => {
@@ -61,5 +62,26 @@ describe("MarkdownContent", () => {
 
   it("renders an accessible empty state", () => {
     expect(renderToStaticMarkup(<MarkdownContent content="  " emptyText="No content" />)).toContain("No content");
+  });
+
+  it("renders resolved, aliased, missing, unbound and self item references without external URLs", () => {
+    const target: Item = {
+      id: "target", title: "目标当前标题", type: "note", processStatus: "收件箱", readingStatus: "不需要",
+      tags: [], content: "", aiSummary: "", createdAt: "2026-07-18", updatedAt: "2026-07-18", favorite: false,
+    };
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        content="[[item:target]] [[item:target|固定别名]] [[item:missing]] [[手写名称]]"
+        currentItemId="target"
+        items={[target]}
+        onOpenItem={() => undefined}
+      />,
+    );
+    expect(html).toContain("目标当前标题");
+    expect(html).toContain("固定别名");
+    expect(html).toContain("链接目标不存在");
+    expect(html).toContain("手写名称");
+    expect(html).not.toContain("item:target");
+    expect(html).not.toContain("https://");
   });
 });

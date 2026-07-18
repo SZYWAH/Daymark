@@ -203,6 +203,24 @@ export type KnowledgeLink = {
   targetId: string;
   relation: string;
   createdAt: string;
+  linkKind?: "manual" | "inline";
+  targetRef?: string;
+};
+
+export type InlineKnowledgeLink = KnowledgeLink & {
+  sourceKind: "item";
+  targetKind: "item";
+  relation: "正文引用";
+  linkKind: "inline";
+  targetRef: string;
+};
+
+export type ManualKnowledgeLinkInput = {
+  sourceKind: EntityKind;
+  sourceId: string;
+  targetKind: EntityKind;
+  targetId: string;
+  relation: string;
 };
 
 export type MemorySubView = "document" | "ai-review" | "archive" | "patches" | "legacy";

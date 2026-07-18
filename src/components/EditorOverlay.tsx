@@ -8,6 +8,7 @@ import type { FolderNode, Item } from "../types";
 type EditorOverlayProps = {
   open: boolean;
   draft: Item | null;
+  items: Item[];
   folders: FolderNode[];
   tagText: string;
   dirty: boolean;
@@ -20,6 +21,7 @@ type EditorOverlayProps = {
 export function EditorOverlay({
   open,
   draft,
+  items,
   folders,
   tagText,
   dirty,
@@ -55,6 +57,7 @@ export function EditorOverlay({
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") requestCancel();
     };
     window.addEventListener("keydown", onKeyDown);
@@ -117,6 +120,7 @@ export function EditorOverlay({
           <EditForm
             draft={draft}
             folders={folders}
+            items={items}
             tagText={tagText}
             onDraftChange={onDraftChange}
             onTagTextChange={onTagTextChange}

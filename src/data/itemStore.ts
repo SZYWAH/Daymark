@@ -19,6 +19,7 @@ import {
   type JournalEntry,
   type JournalTodo,
   type KnowledgeLink,
+  type ManualKnowledgeLinkInput,
   type MemoryCard,
   type MemoryDocument,
   type MemoryPatchDraft,
@@ -34,6 +35,7 @@ import {
 } from "../types";
 import { getThemeMode, saveThemeMode } from "../lib/theme";
 import { createReviewContentVersion } from "../lib/memorySuggestion";
+import { parseItemReferences, replaceItemReferencesForSearch, resolveItemTargetRef } from "../lib/itemReferences";
 import {
   getDailyReviewLibraryHead,
   getDailyReviewLibraryLineage,
@@ -86,7 +88,7 @@ type CreateJournalInput = Partial<Omit<JournalEntry, "id" | "createdAt" | "updat
 type CreateSummaryInput = Omit<SummaryReport, "id" | "createdAt" | "updatedAt">;
 type CreateMemoryInput = Omit<MemoryCard, "id" | "createdAt" | "updatedAt">;
 type MemoryPatch = Partial<Omit<MemoryCard, "id" | "createdAt" | "updatedAt">>;
-type CreateKnowledgeLinkInput = Omit<KnowledgeLink, "id" | "createdAt">;
+type CreateKnowledgeLinkInput = ManualKnowledgeLinkInput;
 type CreateCodexDailyReviewInput = {
   date: string;
   title: string;
@@ -182,7 +184,50 @@ type LinkStoreForTransaction = {
     getAll(query: [EntityKind, string]): Promise<KnowledgeLink[]>;
   };
   delete(key: string): Promise<void>;
+  getAll(): Promise<KnowledgeLink[]>;
+  put(value: KnowledgeLink): Promise<string>;
 };
+
+type ItemStoreForInlineTransaction = {
+  getAll(): Promise<Item[]>;
+};
+
+async function rebuildInlineKnowledgeLinksInTransaction(
+  itemStore: ItemStoreForInlineTransaction,
+  linkStore: LinkStoreForTransaction,
+) {
+  const items = (await itemStore.getAll()).map(normalizeItem);
+  const visibleItems = getVisibleDailyReviewLibraryItems(items);
+  const visibleIds = new Set(visibleItems.map((item) => item.id));
+  const links = await linkStore.getAll();
+  await Promise.all(links.filter((link) => link.linkKind === "inline").map((link) => linkStore.delete(link.id)));
+  const now = formatTimestamp();
+  const writes: Promise<string>[] = [];
+
+  visibleItems.forEach((source) => {
+    const targets = new Map<string, Item>();
+    parseItemReferences(source.content).forEach((token) => {
+      if (token.kind !== "bound" || !token.targetRef || targets.has(token.targetRef)) return;
+      const target = resolveItemTargetRef(items, token.targetRef);
+      if (!target || target.id === source.id || !visibleIds.has(target.id)) return;
+      targets.set(token.targetRef, target);
+    });
+    targets.forEach((target, targetRef) => {
+      writes.push(linkStore.put({
+        id: createId("link"),
+        sourceKind: "item",
+        sourceId: source.id,
+        targetKind: "item",
+        targetId: target.id,
+        relation: "正文引用",
+        createdAt: now,
+        linkKind: "inline",
+        targetRef,
+      }));
+    });
+  });
+  await Promise.all(writes);
+}
 
 function normalizeUniqueSource(value?: string) {
   let normalized = value?.trim().toLowerCase() ?? "";
@@ -726,15 +771,16 @@ export async function restoreCoreBackup(input: unknown): Promise<DaymarkCoreBack
   const memoryDocumentStore = tx.objectStore(MEMORY_DOCUMENT_STORE);
   const memoryStore = tx.objectStore(MEMORY_STORE);
   const linkStore = tx.objectStore(LINK_STORE);
-  const requests: Promise<unknown>[] = [
+  await Promise.all([
     itemStore.clear(),
     folderStore.clear(),
     journalStore.clear(),
     memoryDocumentStore.clear(),
     memoryStore.clear(),
     linkStore.clear(),
-  ];
+  ]);
 
+  const requests: Promise<unknown>[] = [];
   backup.payload.items.forEach((item) => requests.push(itemStore.put(normalizeItem(item))));
   backup.payload.folders.forEach((folder) => requests.push(folderStore.put(folder)));
   backup.payload.journalEntries.forEach((entry) => requests.push(journalStore.put(normalizeJournalEntry(entry))));
@@ -744,8 +790,11 @@ export async function restoreCoreBackup(input: unknown): Promise<DaymarkCoreBack
   backup.payload.memoryCards.forEach((card) => requests.push(memoryStore.put(card)));
   backup.payload.links.forEach((link) => requests.push(linkStore.put(link)));
 
-  await Promise.all([...requests, tx.done]);
-  return backup.counts;
+  await Promise.all(requests);
+  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
+  const restoredLinkCount = (await linkStore.getAll()).length;
+  await tx.done;
+  return { ...backup.counts, links: restoredLinkCount };
 }
 
 function getCoreBackupCounts(payload: DaymarkCoreBackupPayload): DaymarkCoreBackupCounts {
@@ -876,6 +925,16 @@ function validateBackupLink(record: Record<string, unknown>, label: string) {
   requireStringField(record, "targetId", label);
   requireStringField(record, "relation", label);
   requireStringField(record, "createdAt", label);
+  if (record.linkKind !== undefined && record.linkKind !== "manual" && record.linkKind !== "inline") {
+    throw new Error(`备份字段 ${label}.linkKind 无效。`);
+  }
+  if (record.targetRef !== undefined) requireStringField(record, "targetRef", label);
+  if (record.linkKind === "inline") {
+    if (record.sourceKind !== "item" || record.targetKind !== "item" || record.relation !== "正文引用") {
+      throw new Error(`备份字段 ${label} 的正文引用无效。`);
+    }
+    requireStringField(record, "targetRef", label);
+  }
 }
 
 function requireStringField(record: Record<string, unknown>, field: string, label: string) {
@@ -981,7 +1040,10 @@ export async function createItem(input: CreateItemInput = {}) {
   };
 
   const normalized = normalizeItem(item);
-  await db.put(ITEM_STORE, normalized);
+  const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
+  await tx.objectStore(ITEM_STORE).put(normalized);
+  await rebuildInlineKnowledgeLinksInTransaction(tx.objectStore(ITEM_STORE), tx.objectStore(LINK_STORE));
+  await tx.done;
   return normalized;
 }
 
@@ -999,8 +1061,9 @@ export async function publishDailyReviewToLibrary(
   if (!content) throw new Error("资料正文不能为空。");
 
   const db = await getDb();
-  const tx = db.transaction([ITEM_STORE, DAILY_CONVERSATION_REVIEW_STORE], "readwrite");
+  const tx = db.transaction([ITEM_STORE, LINK_STORE, DAILY_CONVERSATION_REVIEW_STORE], "readwrite");
   const itemStore = tx.objectStore(ITEM_STORE);
+  const linkStore = tx.objectStore(LINK_STORE);
   const reviewStore = tx.objectStore(DAILY_CONVERSATION_REVIEW_STORE);
   const review = await reviewStore.get(reviewId);
   if (!review) {
@@ -1049,6 +1112,7 @@ export async function publishDailyReviewToLibrary(
   });
 
   await itemStore.put(item);
+  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
   await tx.done;
   return { item, created: true };
 }
@@ -1073,8 +1137,9 @@ export async function applyDailyReviewLibraryUpdate(
   if (!sourceId) throw new Error("来源回顾不能为空。");
 
   const db = await getDb();
-  const tx = db.transaction([ITEM_STORE, DAILY_CONVERSATION_REVIEW_STORE], "readwrite");
+  const tx = db.transaction([ITEM_STORE, LINK_STORE, DAILY_CONVERSATION_REVIEW_STORE], "readwrite");
   const itemStore = tx.objectStore(ITEM_STORE);
+  const linkStore = tx.objectStore(LINK_STORE);
   const reviewStore = tx.objectStore(DAILY_CONVERSATION_REVIEW_STORE);
   const items = (await itemStore.getAll()).map(normalizeItem);
   const lineage = getDailyReviewLibraryLineage(items, sourceKey);
@@ -1168,6 +1233,7 @@ export async function applyDailyReviewLibraryUpdate(
       },
     });
     await itemStore.put(updated);
+    await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
     await tx.done;
     return { item: updated, created: false };
   }
@@ -1191,6 +1257,7 @@ export async function applyDailyReviewLibraryUpdate(
     },
   });
   await itemStore.put(created);
+  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
   await tx.done;
   return { item: created, created: true };
 }
@@ -1210,8 +1277,9 @@ export async function restoreDailyReviewLibraryVersion(
   });
 
   const db = await getDb();
-  const tx = db.transaction(ITEM_STORE, "readwrite");
+  const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
   const itemStore = tx.objectStore(ITEM_STORE);
+  const linkStore = tx.objectStore(LINK_STORE);
   const items = (await itemStore.getAll()).map(normalizeItem);
   const lineage = getDailyReviewLibraryLineage(items, sourceKey);
   if (!lineage) throw new Error("资料版本链不存在，请刷新后重试。");
@@ -1262,6 +1330,7 @@ export async function restoreDailyReviewLibraryVersion(
     },
   });
   await itemStore.put(restored);
+  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
   await tx.done;
   return { item: restored, created: true };
 }
@@ -1468,6 +1537,7 @@ export async function createItemWithKnowledgeLink(
   const existingLinks = await linkStore.index("by-source").getAll([linkInput.sourceKind, sourceId]);
   const duplicateLink = existingLinks.find(
     (link) =>
+      (link.linkKind ?? "manual") === "manual" &&
       link.targetKind === linkInput.targetKind &&
       link.targetId === item.id &&
       link.relation === relation,
@@ -1480,11 +1550,14 @@ export async function createItemWithKnowledgeLink(
     targetId: item.id,
     relation,
     createdAt: now,
+    linkKind: "manual",
   };
 
   if (!duplicateLink) {
     await linkStore.put(link);
   }
+
+  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
 
   await tx.done;
   return { item, link };
@@ -1492,7 +1565,9 @@ export async function createItemWithKnowledgeLink(
 
 export async function updateItem(id: string, patch: ItemPatch) {
   const db = await getDb();
-  const current = await db.get(ITEM_STORE, id);
+  const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
+  const itemStore = tx.objectStore(ITEM_STORE);
+  const current = await itemStore.get(id);
 
   if (!current) {
     throw new Error(`Item not found: ${id}`);
@@ -1504,7 +1579,11 @@ export async function updateItem(id: string, patch: ItemPatch) {
     updatedAt: formatTimestamp(),
   });
 
-  await db.put(ITEM_STORE, updated);
+  await itemStore.put(updated);
+  if (Object.prototype.hasOwnProperty.call(patch, "content") || Object.prototype.hasOwnProperty.call(patch, "origin")) {
+    await rebuildInlineKnowledgeLinksInTransaction(itemStore, tx.objectStore(LINK_STORE));
+  }
+  await tx.done;
   return updated;
 }
 
@@ -1513,6 +1592,7 @@ export async function deleteItem(id: string) {
   const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
   await tx.objectStore(ITEM_STORE).delete(id);
   await deleteLinksForEntityInTransaction(tx.objectStore(LINK_STORE), "item", id);
+  await rebuildInlineKnowledgeLinksInTransaction(tx.objectStore(ITEM_STORE), tx.objectStore(LINK_STORE));
   await tx.done;
 }
 
@@ -2048,11 +2128,12 @@ export async function getMemoryDocument() {
 
 export async function putLibraryRecords({ items, folders }: LibraryRecordsInput) {
   const db = await getDb();
-  const tx = db.transaction([ITEM_STORE, FOLDER_STORE], "readwrite");
+  const tx = db.transaction([ITEM_STORE, FOLDER_STORE, LINK_STORE], "readwrite");
   await Promise.all([
     ...folders.map((folder) => tx.objectStore(FOLDER_STORE).put(folder)),
     ...items.map((item) => tx.objectStore(ITEM_STORE).put(normalizeItem(item))),
   ]);
+  await rebuildInlineKnowledgeLinksInTransaction(tx.objectStore(ITEM_STORE), tx.objectStore(LINK_STORE));
   await tx.done;
 }
 
@@ -2297,6 +2378,7 @@ export async function createKnowledgeLink(input: CreateKnowledgeLinkInput) {
   const existing = await tx.store.index("by-source").getAll([input.sourceKind, sourceId]);
   const duplicate = existing.find(
     (link) =>
+      (link.linkKind ?? "manual") === "manual" &&
       link.targetKind === input.targetKind &&
       link.targetId === targetId &&
       link.relation === relation,
@@ -2315,6 +2397,7 @@ export async function createKnowledgeLink(input: CreateKnowledgeLinkInput) {
     targetId,
     relation,
     createdAt: formatTimestamp(),
+    linkKind: "manual",
   };
 
   await tx.store.put(link);
@@ -2324,6 +2407,8 @@ export async function createKnowledgeLink(input: CreateKnowledgeLinkInput) {
 
 export async function deleteKnowledgeLink(id: string) {
   const db = await getDb();
+  const link = await db.get(LINK_STORE, id);
+  if (!link || link.linkKind === "inline") return;
   await db.delete(LINK_STORE, id);
 }
 
@@ -2409,7 +2494,7 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
       title: item.title,
       snippetSource: [
         item.title,
-        item.content,
+        replaceItemReferencesForSearch(item.content, snapshot.items),
         item.aiSummary,
         item.filePath,
         item.sourceUrl,

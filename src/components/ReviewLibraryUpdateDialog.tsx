@@ -2,7 +2,7 @@ import { GitCompareArrows, Save, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { getSafeErrorMessage } from "../lib/redaction";
-import type { DailyConversationReview, Item } from "../types";
+import type { DailyConversationReview, FolderNode, Item } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MarkdownContent } from "./MarkdownContent";
 import { MarkdownEditor } from "./MarkdownEditor";
@@ -23,6 +23,8 @@ type ReviewLibraryUpdateDialogProps = {
   open: boolean;
   item: Item | null;
   source: DailyConversationReview | null;
+  items: Item[];
+  folders: FolderNode[];
   onClose: () => void;
   onSubmit: (
     mode: ReviewLibraryUpdateMode,
@@ -35,6 +37,8 @@ export function ReviewLibraryUpdateDialog({
   open,
   item,
   source,
+  items,
+  folders,
   onClose,
   onSubmit,
 }: ReviewLibraryUpdateDialogProps) {
@@ -99,6 +103,8 @@ export function ReviewLibraryUpdateDialog({
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key === "Escape" && document.querySelector(".markdown-reference-picker")) return;
       if (event.key === "Escape" && !busy && !discardConfirmOpen) {
         event.preventDefault();
         requestClose();
@@ -245,6 +251,9 @@ export function ReviewLibraryUpdateDialog({
                     ariaDescribedBy={contentMissing ? validationId : undefined}
                     ariaInvalid={contentMissing}
                     disabled={busy}
+                    currentItem={context.item}
+                    folders={folders}
+                    items={items}
                     label="正文"
                     minHeightClass="min-h-[300px]"
                     onChange={(content) => setDraft((current) => ({ ...current, content }))}

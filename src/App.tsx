@@ -692,6 +692,7 @@ export default function App() {
   const [reviewPublishInitialDraft, setReviewPublishInitialDraft] = useState<ReviewLibraryDraft | null>(null);
   const [reviewPublishReturnSurface, setReviewPublishReturnSurface] = useState<"memory" | "today">("memory");
   const [reviewLibraryNavigation, setReviewLibraryNavigation] = useState<ReviewLibraryNavigationContext | null>(null);
+  const [libraryItemNavigationStack, setLibraryItemNavigationStack] = useState<string[]>([]);
   const [todayAutoWorkReviewOpenRequestKey, setTodayAutoWorkReviewOpenRequestKey] = useState(0);
   const [error, setError] = useState("");
   const [quickCaptureNotice, setQuickCaptureNotice] = useState("");
@@ -1470,6 +1471,7 @@ export default function App() {
 
   const selectViewNow = (view: ActiveView) => {
     setReviewLibraryNavigation(null);
+    setLibraryItemNavigationStack([]);
     setTodayAutoWorkReviewOpenRequestKey(0);
     if (view.kind === "memory" && !view.subView) {
       setActiveView({ kind: "memory", subView: "document" });
@@ -1539,6 +1541,7 @@ export default function App() {
 
   const handleSelectItem = async (item: Item, preserveReviewNavigation = false) => {
     if (blockUnsavedEditorNavigation()) return;
+    setLibraryItemNavigationStack([]);
     if (!preserveReviewNavigation) setReviewLibraryNavigation(null);
     const fallbackView: ListView = item.folderId ? { kind: "folder", folderId: item.folderId } : { kind: "smart", id: "unfiled" };
     if (activeView.kind === "folder" || activeView.kind === "smart") {
@@ -1565,6 +1568,7 @@ export default function App() {
   const handlePreviewLibraryItem = async (item: Item) => {
     if (blockUnsavedEditorNavigation()) return;
     setReviewLibraryNavigation(null);
+    setLibraryItemNavigationStack([]);
     setTodayAutoWorkReviewOpenRequestKey(0);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 1279px)").matches) {
       await handleSelectItem(item);
@@ -1630,6 +1634,7 @@ export default function App() {
     });
 
     await refreshLibraryData(created.id);
+    await refreshLinks();
     setIsEditing(false);
   };
 
@@ -1682,6 +1687,7 @@ export default function App() {
     setStatusFilter("all");
     setQuery("");
     await refreshLibraryData(lastCreatedId);
+    await refreshLinks();
     if (skippedCount > 0) {
       setError(`已导入新资料，并跳过 ${skippedCount} 条重复资料。`);
     }
@@ -1833,6 +1839,7 @@ export default function App() {
     const updated = await updateItem(draft.id, sanitizeItemDraft(draft, tagText));
     clearItemEditorDraft(draft.id);
     await refreshLibraryData(updated.id);
+    await refreshLinks();
     setActiveView({ kind: "item", itemId: updated.id });
     setDraft(null);
     setTagText("");
@@ -1908,6 +1915,7 @@ export default function App() {
     if (!selectedItem) return;
     const updated = await updateItem(selectedItem.id, patch);
     await refreshLibraryData(updated.id);
+    if (Object.prototype.hasOwnProperty.call(patch, "content")) await refreshLinks();
   };
 
   const handleRunAiAction = async (action: AiAction, confirmed = false, confirmedItem?: Item) => {
@@ -2237,6 +2245,7 @@ export default function App() {
       if (extractSourceId) await refreshLinks();
 
       await refreshLibraryData(created.id);
+      if (!extractSourceId) await refreshLinks();
       setExtractOpen(false);
       setExtractDraft(null);
       setExtractSourceId("");
@@ -3338,6 +3347,7 @@ export default function App() {
     const sourceReviewId = reviewPublishSource.id;
     const result = await publishDailyReviewToLibrary(reviewPublishDraft);
     await refreshLibraryData(result.item.id);
+    await refreshLinks();
     setReviewLibraryNavigation({
       kind: "return-review",
       reviewId: sourceReviewId,
@@ -3369,6 +3379,16 @@ export default function App() {
   };
 
   const handleBackFromReviewLibraryItem = () => {
+    if (libraryItemNavigationStack.length > 0) {
+      const previousId = libraryItemNavigationStack[libraryItemNavigationStack.length - 1];
+      const previous = items.find((item) => item.id === previousId);
+      const remaining = libraryItemNavigationStack.slice(0, -1);
+      if (previous) {
+        void handleSelectItem(previous, true).then(() => setLibraryItemNavigationStack(remaining));
+        return;
+      }
+      setLibraryItemNavigationStack(remaining);
+    }
     const navigation = reviewLibraryNavigation;
     if (navigation?.kind !== "return-review") {
       handleSelectView(lastListView);
@@ -3412,6 +3432,7 @@ export default function App() {
       content: finalDraft.content,
     });
     await refreshLibraryData(result.item.id);
+    await refreshLinks();
     await handleSelectItem(result.item, true);
   };
 
@@ -3438,6 +3459,7 @@ export default function App() {
       sourceKey: version.origin.sourceKey,
     });
     await refreshLibraryData(result.item.id);
+    await refreshLinks();
     await handleSelectItem(result.item, true);
   };
 
@@ -3664,9 +3686,17 @@ export default function App() {
     await refreshMemoryData();
   };
 
-  const handleCreateLink = async (input: Omit<KnowledgeLink, "id" | "createdAt">) => {
+  const handleCreateLink: ItemReaderProps["onCreateLink"] = async (input) => {
     await createKnowledgeLink(input);
     await refreshLinks();
+  };
+
+  const handleOpenItemReference = (itemId: string) => {
+    const target = items.find((item) => item.id === itemId);
+    if (!target || !selectedItem || target.id === selectedItem.id) return;
+    const previousStack = libraryItemNavigationStack;
+    const sourceId = selectedItem.id;
+    void handleSelectItem(target, true).then(() => setLibraryItemNavigationStack([...previousStack, sourceId]));
   };
 
   const handleDeleteLink = async (id: string) => {
@@ -3676,6 +3706,7 @@ export default function App() {
 
   const handleOpenEntity = (kind: EntityKind, id: string) => {
     setReviewLibraryNavigation(null);
+    setLibraryItemNavigationStack([]);
     setTodayAutoWorkReviewOpenRequestKey(0);
     if (kind === "item") {
       const item = items.find((currentItem) => currentItem.id === id);
@@ -3964,7 +3995,7 @@ export default function App() {
               links={links}
               aiRunningAction={aiRunningAction}
               aiRunState={aiRunState?.itemId === selectedItem?.id ? aiRunState : null}
-              backLabel={reviewLibraryNavigation?.kind === "return-review" ? "返回回顾" : "返回列表"}
+              backLabel={libraryItemNavigationStack.length > 0 ? "返回上一资料" : reviewLibraryNavigation?.kind === "return-review" ? "返回回顾" : "返回列表"}
               onBackToList={handleBackFromReviewLibraryItem}
               onEdit={handleStartEdit}
               onCreate={handleCreateItem}
@@ -3977,6 +4008,7 @@ export default function App() {
               onCreateLink={handleCreateLink}
               onDeleteLink={handleDeleteLink}
               onOpenEntity={handleOpenEntity}
+              onOpenItemReference={handleOpenItemReference}
               reviewLibraryState={selectedReviewLibraryState}
               onOpenReviewSource={handleOpenReviewSource}
               onOpenReviewLibraryItem={handleOpenReviewLibraryItem}
@@ -4085,8 +4117,8 @@ export default function App() {
                     links={links}
                     aiRunningAction={aiRunningAction}
                     aiRunState={aiRunState?.itemId === selectedItem?.id ? aiRunState : null}
-                    showBackButton={false}
-                    backLabel={reviewLibraryNavigation?.kind === "return-review" ? "返回回顾" : "返回列表"}
+                    showBackButton={libraryItemNavigationStack.length > 0}
+                    backLabel={libraryItemNavigationStack.length > 0 ? "返回上一资料" : reviewLibraryNavigation?.kind === "return-review" ? "返回回顾" : "返回列表"}
                     onBackToList={handleBackFromReviewLibraryItem}
                     onEdit={handleStartEdit}
                     onCreate={handleCreateItem}
@@ -4099,6 +4131,7 @@ export default function App() {
                     onCreateLink={handleCreateLink}
                     onDeleteLink={handleDeleteLink}
                     onOpenEntity={handleOpenEntity}
+                    onOpenItemReference={handleOpenItemReference}
                     reviewLibraryState={selectedReviewLibraryState}
                     onOpenReviewSource={handleOpenReviewSource}
                     onOpenReviewLibraryItem={handleOpenReviewLibraryItem}
@@ -4206,6 +4239,7 @@ export default function App() {
         draft={reviewPublishDraft}
         initialDraft={reviewPublishInitialDraft}
         folders={folders}
+        items={items}
         onDraftChange={setReviewPublishDraft}
         onClose={closeReviewPublishDialog}
         onSave={handleSaveReviewPublishDraft}
@@ -4214,6 +4248,7 @@ export default function App() {
         open={isEditing}
         draft={draft}
         folders={folders}
+        items={items}
         tagText={tagText}
         dirty={editorDirty}
         onDraftChange={setDraft}

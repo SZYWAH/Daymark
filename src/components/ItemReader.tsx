@@ -33,6 +33,11 @@ import { MarkdownContent } from "./MarkdownContent";
 import { checkLocalPath, openExternalUrl, openLocalPath, revealLocalPath, type PathStatus } from "../lib/desktop";
 import { getFolderPath } from "../lib/folders";
 import { extractMarkdownOutline } from "../lib/markdown";
+import {
+  extractItemReferenceContexts,
+  getItemTargetRef,
+  resolveItemReferences,
+} from "../lib/itemReferences";
 import { getSafeErrorMessage } from "../lib/redaction";
 import {
   getDailyReviewLibraryRevision,
@@ -54,6 +59,7 @@ import {
   type ItemType,
   type JournalEntry,
   type KnowledgeLink,
+  type ManualKnowledgeLinkInput,
   type MemoryCard,
   type ProcessStatus,
   type ReadingStatus,
@@ -92,9 +98,10 @@ export type ItemReaderProps = {
   onUpdateItem: (patch: Partial<Item>) => Promise<void> | void;
   onRunAiAction: (action: AiAction) => void;
   onCancelAiAction: () => void;
-  onCreateLink: (input: Omit<KnowledgeLink, "id" | "createdAt">) => Promise<void>;
+  onCreateLink: (input: ManualKnowledgeLinkInput) => Promise<void>;
   onDeleteLink: (id: string) => Promise<void>;
   onOpenEntity: (kind: EntityKind, id: string) => void;
+  onOpenItemReference?: (itemId: string) => void;
   reviewLibraryState?: ReviewLibraryReaderState | null;
   onOpenReviewSource?: (reviewId: string) => Promise<void> | void;
   onOpenReviewLibraryItem?: (itemId: string) => Promise<void> | void;
@@ -153,6 +160,7 @@ export function ItemReader({
   onCreateLink,
   onDeleteLink,
   onOpenEntity,
+  onOpenItemReference,
   reviewLibraryState,
   onOpenReviewSource,
   onOpenReviewLibraryItem,
@@ -170,11 +178,12 @@ export function ItemReader({
   const itemLinks = useMemo(
     () =>
       item
-        ? links.filter(
-            (link) =>
-              (link.sourceKind === "item" && link.sourceId === item.id) ||
-              (link.targetKind === "item" && link.targetId === item.id),
-          )
+        ? links.filter((link) =>
+            (link.linkKind ?? "manual") === "manual"
+            && (
+              (link.sourceKind === "item" && link.sourceId === item.id)
+              || (link.targetKind === "item" && link.targetId === item.id)
+            ))
         : [],
     [item, links],
   );
@@ -269,7 +278,12 @@ export function ItemReader({
         <main className="mx-auto flex w-full max-w-[1280px] flex-col gap-4">
           <ReaderSection icon={FileText} title="阅读">
             <div className="reader-content-body max-h-[min(62vh,720px)] overflow-y-auto pr-1 scrollbar-thin">
-              <MarkdownContent content={item.content} />
+              <MarkdownContent
+                content={item.content}
+                currentItemId={item.id}
+                items={items}
+                onOpenItem={onOpenItemReference}
+              />
             </div>
           </ReaderSection>
 
@@ -348,11 +362,14 @@ export function ItemReader({
             onCreateLink={onCreateLink}
             onDeleteLink={onDeleteLink}
             onOpenEntity={onOpenEntity}
+            onOpenItemReference={onOpenItemReference ?? ((itemId) => onOpenEntity("item", itemId))}
           />
         </main>
       </div>
 
       <ReviewLibraryUpdateDialog
+        folders={folders}
+        items={items}
         open={reviewUpdateOpen}
         item={reviewLibraryState?.head ?? null}
         source={reviewLibraryState?.source ?? null}
@@ -878,6 +895,7 @@ function ReaderReferencePanels({
   onCreateLink,
   onDeleteLink,
   onOpenEntity,
+  onOpenItemReference,
 }: {
   item: Item;
   outline: Array<{ level: number; text: string }>;
@@ -886,29 +904,72 @@ function ReaderReferencePanels({
   journalEntries: JournalEntry[];
   memories: MemoryCard[];
   reports: SummaryReport[];
-  onCreateLink: (input: Omit<KnowledgeLink, "id" | "createdAt">) => Promise<void>;
+  onCreateLink: (input: ManualKnowledgeLinkInput) => Promise<void>;
   onDeleteLink: (id: string) => Promise<void>;
   onOpenEntity: (kind: EntityKind, id: string) => void;
+  onOpenItemReference: (itemId: string) => void;
 }) {
-  const linkCount = links.filter(
+  const manualLinks = links.filter((link) => (link.linkKind ?? "manual") === "manual");
+  const linkCount = manualLinks.filter(
     (link) =>
       (link.sourceKind === "item" && link.sourceId === item.id) ||
       (link.targetKind === "item" && link.targetId === item.id),
   ).length;
+  const resolutions = resolveItemReferences(item.content, items, item.id);
+  const outgoingByRef = new Map<string, (typeof resolutions)[number]>();
+  resolutions.forEach((resolution) => {
+    const key = resolution.token.targetRef ?? `unbound:${resolution.token.start}`;
+    if (!outgoingByRef.has(key)) outgoingByRef.set(key, resolution);
+  });
+  const outgoing = Array.from(outgoingByRef.values()).filter((resolution) => resolution.status === "resolved" && resolution.item);
+  const broken = Array.from(outgoingByRef.values()).filter((resolution) => resolution.status !== "resolved");
+  const backlinks = links
+    .filter((link) => link.linkKind === "inline" && link.targetId === item.id && link.sourceKind === "item")
+    .map((link) => ({ link, source: items.find((candidate) => candidate.id === link.sourceId) }))
+    .filter((entry): entry is { link: KnowledgeLink; source: Item } => Boolean(entry.source))
+    .sort((left, right) => right.source.updatedAt.localeCompare(left.source.updatedAt));
 
   return (
     <details className="reader-collapsed-panel">
       <summary className="reader-collapsed-summary">
-        <span>关联与大纲</span>
-        <span className="text-xs text-ink/38">相关 {linkCount} · 大纲 {outline.length}</span>
+        <span>引用、关联与大纲</span>
+        <span className="text-xs text-ink/38">
+          正文引用 {outgoing.length} · 被引用 {backlinks.length} · 手动关联 {linkCount} · 大纲 {outline.length}
+        </span>
       </summary>
-      <div className="mt-3 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)]">
+      <div className="mt-3 grid min-w-0 gap-4 xl:grid-cols-2">
+        <ReferenceList title="正文引用" empty="正文中还没有资料链接。">
+          {outgoing.map((resolution) => (
+            <button className="reader-info-strip w-full text-left" key={resolution.token.targetRef} onClick={() => onOpenItemReference(resolution.item!.id)}>
+              <p className="truncate text-sm font-medium text-ink">{resolution.item!.title}</p>
+              <p className="mt-0.5 truncate text-xs text-ink/42">{resolution.token.alias ? `别名：${resolution.token.alias}` : "跟随目标当前标题"}</p>
+            </button>
+          ))}
+        </ReferenceList>
+        <ReferenceList title="反向引用" empty="当前没有其他资料引用这里。">
+          {backlinks.map(({ link, source }) => (
+            <button className="reader-info-strip w-full text-left" key={link.id} onClick={() => onOpenItemReference(source.id)}>
+              <p className="truncate text-sm font-medium text-ink">{source.title}</p>
+              {extractItemReferenceContexts(source.content, link.targetRef ?? getItemTargetRef(item), items).map((context, index) => (
+                <p className="mt-1 line-clamp-2 text-xs leading-5 text-ink/46" key={`${link.id}-${index}`}>{context}</p>
+              ))}
+            </button>
+          ))}
+        </ReferenceList>
+        <ReferenceList title="失效链接" empty="没有失效或未绑定的正文链接。">
+          {broken.map((resolution) => (
+            <div className="reader-info-strip" key={`${resolution.token.start}-${resolution.token.raw}`}>
+              <p className="text-sm text-ink/55">{resolution.displayText}</p>
+              <p className="mt-0.5 text-xs text-ink/38">{resolution.status === "self" ? "链接指向当前资料" : "链接目标不存在"}</p>
+            </div>
+          ))}
+        </ReferenceList>
         <div className="min-w-0">
-          <div className="mb-2 text-xs font-medium text-ink/42">相关内容</div>
+          <div className="mb-2 text-xs font-medium text-ink/42">手动关联</div>
           <LinkPanel
             entityKind="item"
             entityId={item.id}
-            links={links}
+            links={manualLinks}
             items={items}
             journalEntries={journalEntries}
             memories={memories}
@@ -918,7 +979,7 @@ function ReaderReferencePanels({
             onOpenEntity={onOpenEntity}
           />
         </div>
-        <div className="min-w-0 border-t border-line/70 pt-3 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
+        <div className="min-w-0 border-t border-line/70 pt-3 xl:col-span-2">
           <div className="mb-2 text-xs font-medium text-ink/42">文档大纲</div>
           <div className="max-h-[260px] space-y-1 overflow-y-auto pr-1 scrollbar-thin">
             {outline.length > 0 ? (
@@ -938,6 +999,18 @@ function ReaderReferencePanels({
         </div>
       </div>
     </details>
+  );
+}
+
+function ReferenceList({ title, empty, children }: { title: string; empty: string; children: ReactNode }) {
+  const hasChildren = Array.isArray(children) ? children.length > 0 : Boolean(children);
+  return (
+    <section className="min-w-0">
+      <div className="mb-2 text-xs font-medium text-ink/42">{title}</div>
+      <div className="max-h-[280px] space-y-2 overflow-y-auto pr-1 scrollbar-thin">
+        {hasChildren ? children : <p className="py-2 text-sm text-ink/42">{empty}</p>}
+      </div>
+    </section>
   );
 }
 

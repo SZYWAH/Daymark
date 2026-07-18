@@ -7,13 +7,14 @@ import type { ReactNode } from "react";
 
 type EditFormProps = {
   draft: Item;
+  items: Item[];
   folders: FolderNode[];
   tagText: string;
   onDraftChange: (item: Item) => void;
   onTagTextChange: (value: string) => void;
 };
 
-export function EditForm({ draft, folders, tagText, onDraftChange, onTagTextChange }: EditFormProps) {
+export function EditForm({ draft, items, folders, tagText, onDraftChange, onTagTextChange }: EditFormProps) {
   const updateField = <K extends keyof Item>(key: K, value: Item[K]) => {
     onDraftChange({ ...draft, [key]: value });
   };
@@ -63,6 +64,9 @@ export function EditForm({ draft, folders, tagText, onDraftChange, onTagTextChan
       </label>
 
       <MarkdownEditor
+        currentItem={draft}
+        folders={folders}
+        items={items}
         label="正文"
         minHeightClass="min-h-[320px]"
         onChange={(content) => updateField("content", content)}

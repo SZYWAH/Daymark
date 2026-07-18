@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { getSafeErrorMessage } from "../lib/redaction";
 import type { ReviewLibraryDraft } from "../lib/reviewLibraryPublication";
-import type { DailyConversationReview, FolderNode } from "../types";
+import type { DailyConversationReview, FolderNode, Item } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { FolderPicker } from "./FolderPicker";
 import { MarkdownEditor } from "./MarkdownEditor";
@@ -14,6 +14,7 @@ type ReviewPublishDialogProps = {
   draft: ReviewLibraryDraft | null;
   initialDraft: ReviewLibraryDraft | null;
   folders: FolderNode[];
+  items: Item[];
   onDraftChange: (draft: ReviewLibraryDraft) => void;
   onClose: () => void;
   onSave: () => Promise<void> | void;
@@ -25,6 +26,7 @@ export function ReviewPublishDialog({
   draft,
   initialDraft,
   folders,
+  items,
   onDraftChange,
   onClose,
   onSave,
@@ -74,7 +76,9 @@ export function ReviewPublishDialog({
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.target instanceof Element && event.target.closest(".select-pop")) return;
+      if (event.key === "Escape" && document.querySelector(".markdown-reference-picker")) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -217,6 +221,8 @@ export function ReviewPublishDialog({
               <MarkdownEditor
                 ariaInvalid={!draft.content.trim()}
                 disabled={saving}
+                folders={folders}
+                items={items}
                 label="正文"
                 minHeightClass="min-h-[300px]"
                 onChange={(content) => onDraftChange({ ...draft, content })}
