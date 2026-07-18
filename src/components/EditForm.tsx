@@ -1,4 +1,5 @@
 import { FolderPicker } from "./FolderPicker";
+import { MarkdownEditor } from "./MarkdownEditor";
 import { SelectMenu } from "./SelectMenu";
 import { PROCESS_STATUSES, READING_STATUSES, ITEM_TYPES, type FolderNode, type Item, type ItemType, type ProcessStatus, type ReadingStatus } from "../types";
 import { typeMeta } from "../ui/itemMeta";
@@ -61,16 +62,12 @@ export function EditForm({ draft, folders, tagText, onDraftChange, onTagTextChan
         />
       </label>
 
-      <label className="block text-xs font-medium text-ink/58">
-        正文
-        <textarea
-          value={draft.content}
-          onChange={(event) => updateField("content", event.target.value)}
-          rows={12}
-          placeholder="记录想法、摘要、说明或待办。文档可以直接写 Markdown 标题，阅读页会生成大纲。"
-          className="field-control mt-1 max-h-[360px] w-full resize-none overflow-y-auto px-3 py-2 text-sm leading-6 scrollbar-thin"
-        />
-      </label>
+      <MarkdownEditor
+        label="正文"
+        minHeightClass="min-h-[320px]"
+        onChange={(content) => updateField("content", content)}
+        value={draft.content}
+      />
 
       <div className="grid gap-3 md:grid-cols-2">
         <label className="block text-xs font-medium text-ink/58">

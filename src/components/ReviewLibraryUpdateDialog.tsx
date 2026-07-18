@@ -4,6 +4,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { getSafeErrorMessage } from "../lib/redaction";
 import type { DailyConversationReview, Item } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { MarkdownContent } from "./MarkdownContent";
+import { MarkdownEditor } from "./MarkdownEditor";
 
 export type ReviewLibraryUpdateMode = "update-current" | "create-version";
 
@@ -238,17 +240,17 @@ export function ReviewLibraryUpdateDialog({
                     value={draft.title}
                   />
                 </label>
-                <label className="mt-3 block text-xs font-medium text-ink/58">
-                  正文
-                  <textarea
-                    aria-describedby={contentMissing ? validationId : undefined}
-                    aria-invalid={contentMissing}
-                    className="field-control mt-1 min-h-[220px] w-full resize-y px-3 py-2 text-sm leading-6 scrollbar-thin"
+                <div className="mt-3">
+                  <MarkdownEditor
+                    ariaDescribedBy={contentMissing ? validationId : undefined}
+                    ariaInvalid={contentMissing}
                     disabled={busy}
-                    onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
+                    label="正文"
+                    minHeightClass="min-h-[300px]"
+                    onChange={(content) => setDraft((current) => ({ ...current, content }))}
                     value={draft.content}
                   />
-                </label>
+                </div>
                 {!valid && <p className="mt-2 text-xs font-medium text-copper" id={validationId}>标题和正文不能为空。</p>}
                 {message && (
                   <p className="mt-3 rounded-[8px] border border-line bg-paper px-3 py-2 text-anywhere text-sm leading-6 text-red-400" role="alert">
@@ -323,8 +325,8 @@ function ComparisonPane({
     <section className={`min-w-0 rounded-[8px] border p-4 ${accent ? "border-copper/30 bg-copper/5" : "border-line bg-panel/70"}`}>
       <div className={`text-xs font-semibold uppercase tracking-[0.14em] ${accent ? "text-copper" : "text-ink/45"}`}>{label}</div>
       <h3 className="mt-2 text-anywhere text-base font-semibold leading-6 text-ink">{title || "无标题"}</h3>
-      <div className="mt-3 max-h-[280px] overflow-y-auto whitespace-pre-wrap border-t border-line/60 pt-3 text-anywhere text-sm leading-6 text-ink/65 scrollbar-thin">
-        {content || "没有正文内容。"}
+      <div className="mt-3 max-h-[360px] overflow-y-auto border-t border-line/60 pt-3 scrollbar-thin">
+        <MarkdownContent compact content={content} emptyText="没有正文内容。" />
       </div>
     </section>
   );

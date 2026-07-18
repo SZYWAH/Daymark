@@ -6,6 +6,7 @@ import type { ReviewLibraryDraft } from "../lib/reviewLibraryPublication";
 import type { DailyConversationReview, FolderNode } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { FolderPicker } from "./FolderPicker";
+import { MarkdownEditor } from "./MarkdownEditor";
 
 type ReviewPublishDialogProps = {
   open: boolean;
@@ -150,7 +151,7 @@ export function ReviewPublishDialog({
       <section
         aria-label="保存回顾到资料库"
         aria-modal="true"
-        className="modal-surface flex max-h-[92vh] w-full max-w-3xl flex-col"
+        className="modal-surface flex max-h-[92vh] w-full max-w-6xl flex-col"
         ref={dialogRef}
         role="dialog"
       >
@@ -213,15 +214,14 @@ export function ReviewPublishDialog({
                   className="field-control field-prominent mt-1 w-full"
                 />
               </label>
-              <label className="block text-xs font-medium text-ink/58">
-                正文
-                <textarea
-                  value={draft.content}
-                  onChange={(event) => onDraftChange({ ...draft, content: event.target.value })}
-                  rows={12}
-                  className="field-control mt-1 max-h-[420px] w-full resize-none overflow-y-auto px-3 py-2 text-sm leading-6 scrollbar-thin"
-                />
-              </label>
+              <MarkdownEditor
+                ariaInvalid={!draft.content.trim()}
+                disabled={saving}
+                label="正文"
+                minHeightClass="min-h-[300px]"
+                onChange={(content) => onDraftChange({ ...draft, content })}
+                value={draft.content}
+              />
               {!valid && <p className="text-xs text-copper">标题和正文不能为空。</p>}
               <div className="flex justify-end gap-2">
                 <button

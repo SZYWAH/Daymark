@@ -29,8 +29,10 @@ import { FolderPicker } from "./FolderPicker";
 import { LinkPanel } from "./LinkPanel";
 import { SelectMenu } from "./SelectMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { MarkdownContent } from "./MarkdownContent";
 import { checkLocalPath, openExternalUrl, openLocalPath, revealLocalPath, type PathStatus } from "../lib/desktop";
 import { getFolderPath } from "../lib/folders";
+import { extractMarkdownOutline } from "../lib/markdown";
 import { getSafeErrorMessage } from "../lib/redaction";
 import {
   getDailyReviewLibraryRevision,
@@ -176,7 +178,7 @@ export function ItemReader({
         : [],
     [item, links],
   );
-  const outline = useMemo(() => (item ? extractOutline(item.content || item.aiSummary || "") : []), [item]);
+  const outline = useMemo(() => (item ? extractMarkdownOutline(item.content || item.aiSummary || "") : []), [item]);
   const hasAiSummary = item ? hasUsefulAiSummary(item.aiSummary) : false;
 
   useEffect(() => {
@@ -266,8 +268,8 @@ export function ItemReader({
       <div className="min-h-0 flex-1 overflow-y-auto bg-paper px-5 pb-24 pt-4 scrollbar-thin lg:pb-4">
         <main className="mx-auto flex w-full max-w-[1280px] flex-col gap-4">
           <ReaderSection icon={FileText} title="阅读">
-            <div className="reader-content-body max-h-[min(52vh,560px)] overflow-y-auto whitespace-pre-wrap pr-1 text-anywhere scrollbar-thin">
-              {item.content || "还没有正文内容。"}
+            <div className="reader-content-body max-h-[min(62vh,720px)] overflow-y-auto pr-1 scrollbar-thin">
+              <MarkdownContent content={item.content} />
             </div>
           </ReaderSection>
 
@@ -1024,21 +1026,6 @@ function labelForStatus<T extends readonly string[]>(values: T, labels: string[]
 function hasUsefulAiSummary(value?: string) {
   const text = value?.trim() ?? "";
   return Boolean(text && text !== "等待 AI 摘要。");
-}
-
-function extractOutline(content: string) {
-  return content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .map((line) => {
-      const markdown = /^(#{1,4})\s+(.+)/.exec(line);
-      if (markdown) return { level: markdown[1].length, text: markdown[2].trim() };
-      const numbered = /^(\d+(?:\.\d+)*)[、.\s]+(.{2,80})$/.exec(line);
-      if (numbered) return { level: Math.min(numbered[1].split(".").length, 4), text: numbered[2].trim() };
-      return null;
-    })
-    .filter((heading): heading is { level: number; text: string } => Boolean(heading))
-    .slice(0, 80);
 }
 
 function formatAiReceiptSummary(receipt: AiRunReceipt) {
