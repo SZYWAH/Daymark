@@ -84,6 +84,7 @@ export function RollingWorkReviewReaderOverlay({
   running,
   progress,
   publishedItemId,
+  publishedItemSourceChanged,
   onClose,
   onRun,
   onArchive,
@@ -93,6 +94,7 @@ export function RollingWorkReviewReaderOverlay({
   running: boolean;
   progress: CodexReviewProgress | null;
   publishedItemId?: string;
+  publishedItemSourceChanged?: boolean;
   onClose: () => void;
   onRun: () => Promise<unknown>;
   onArchive: (date: string) => Promise<unknown>;
@@ -158,6 +160,9 @@ export function RollingWorkReviewReaderOverlay({
             {message || progress?.message || (archived ? "已保存到回顾档案。" : "自动草稿已在本机保存，可按需归档。")}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {publishedItemSourceChanged && (
+              <span className="quiet-chip py-0.5 text-[11px] text-copper">资料待同步</span>
+            )}
             {review.archiveReviewId && (
               <button
                 className="soft-button action-compact"

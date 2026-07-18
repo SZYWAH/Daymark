@@ -23,7 +23,7 @@ import { FirstRunGuide, type OnboardingStartAction } from "./components/FirstRun
 import { ImportDialog, type ImportDraft, type ImportMode } from "./components/ImportDialog";
 import { ConfirmDialog, PromptDialog } from "./components/ConfirmDialog";
 import { ItemList } from "./components/ItemList";
-import { ItemReader } from "./components/ItemReader";
+import { ItemReader, type ItemReaderProps, type ReviewLibraryReaderState } from "./components/ItemReader";
 import { JournalPage } from "./components/JournalPage";
 import { LibrarySmartToolbar } from "./components/LibrarySmartToolbar";
 import { MemoryPage } from "./components/MemoryPage";
@@ -55,6 +55,7 @@ import {
   deleteKnowledgeLink,
   getAutoWorkReviewSettings,
   applyDailyReviewReplacementDraft,
+  applyDailyReviewLibraryUpdate,
   applyMemoryPatchDraft,
   formatTimestamp,
   getCodexDailyReviews,
@@ -78,6 +79,7 @@ import {
   publishDailyReviewToLibrary,
   replaceConversationSessionIndex,
   restoreCoreBackup,
+  restoreDailyReviewLibraryVersion,
   saveAutoWorkReviewSettings,
   type DaymarkCoreBackupCounts,
   type DaymarkCoreBackupV1,
@@ -131,6 +133,10 @@ import {
 import { formatReviewGenerationResult } from "./lib/reviewGenerationResult";
 import {
   createReviewLibraryDraft,
+  getDailyReviewLibraryHead,
+  getDailyReviewLibraryRevision,
+  getVisibleDailyReviewLibraryItems,
+  resolveDailyReviewLibraryState,
   type ReviewLibraryDraft,
 } from "./lib/reviewLibraryPublication";
 import { toConversationReadProgressView } from "./lib/conversationReadProgress";
@@ -206,6 +212,9 @@ import { PROCESS_STATUSES, READING_STATUSES } from "./types";
 type StatusFilter = ProcessStatus | "all";
 type ListView = { kind: "smart"; id: SmartView } | { kind: "folder"; folderId: string };
 type ForegroundWorkspace = "scan" | "review" | null;
+type ReviewLibraryNavigationContext =
+  | { kind: "return-item"; itemId: string; reviewId: string }
+  | { kind: "return-review"; reviewId: string; surface: "memory" | "today" };
 type SummaryPrompt = {
   id: string;
   periodType: "day" | "week" | "month";
@@ -681,6 +690,9 @@ export default function App() {
   const [reviewPublishSource, setReviewPublishSource] = useState<DailyConversationReview | null>(null);
   const [reviewPublishDraft, setReviewPublishDraft] = useState<ReviewLibraryDraft | null>(null);
   const [reviewPublishInitialDraft, setReviewPublishInitialDraft] = useState<ReviewLibraryDraft | null>(null);
+  const [reviewPublishReturnSurface, setReviewPublishReturnSurface] = useState<"memory" | "today">("memory");
+  const [reviewLibraryNavigation, setReviewLibraryNavigation] = useState<ReviewLibraryNavigationContext | null>(null);
+  const [todayAutoWorkReviewOpenRequestKey, setTodayAutoWorkReviewOpenRequestKey] = useState(0);
   const [error, setError] = useState("");
   const [quickCaptureNotice, setQuickCaptureNotice] = useState("");
   const [searchRefreshKey, setSearchRefreshKey] = useState(0);
@@ -975,9 +987,10 @@ export default function App() {
         : undefined,
     [activeView, folders],
   );
+  const visibleItems = useMemo(() => getVisibleDailyReviewLibraryItems(items), [items]);
   const filteredItems = useMemo(
-    () => getFilteredItems(items, activeView, statusFilter, query, activeFolderIds),
-    [activeFolderIds, activeView, items, query, statusFilter],
+    () => getFilteredItems(visibleItems, activeView, statusFilter, query, activeFolderIds),
+    [activeFolderIds, activeView, query, statusFilter, visibleItems],
   );
 
   const selectedItem =
@@ -986,19 +999,59 @@ export default function App() {
       : activeView.kind === "smart" || activeView.kind === "folder"
         ? items.find((item) => item.id === selectedId)
         : undefined;
-  const publishedReviewItemIds = useMemo(() => {
-    const itemIdByReviewKey = new Map(
-      items
-        .filter((item) => item.origin?.kind === "daily-review")
-        .map((item) => [item.origin!.sourceKey, item.id] as const),
+  const reviewLibraryStatesBySourceKey = useMemo(() => {
+    const states = new Map<string, NonNullable<ReturnType<typeof resolveDailyReviewLibraryState>>>();
+    const sourceKeys = new Set(
+      items.flatMap((item) => item.origin?.kind === "daily-review" ? [item.origin.sourceKey] : []),
     );
+    sourceKeys.forEach((sourceKey) => {
+      const state = resolveDailyReviewLibraryState(items, codexReviews, sourceKey);
+      if (state) states.set(sourceKey, state);
+    });
+    return states;
+  }, [codexReviews, items]);
+  const publishedReviewItemIds = useMemo(() => {
     return Object.fromEntries(
       codexReviews.flatMap((review) => {
-        const itemId = itemIdByReviewKey.get(review.reviewKey);
-        return itemId ? [[review.id, itemId]] : [];
+        const head = reviewLibraryStatesBySourceKey.get(review.reviewKey)?.head;
+        return head ? [[review.id, head.id]] : [];
       }),
     ) as Record<string, string>;
-  }, [codexReviews, items]);
+  }, [codexReviews, reviewLibraryStatesBySourceKey]);
+  const sourceChangedItemIds = useMemo(
+    () => new Set(
+      Array.from(reviewLibraryStatesBySourceKey.values())
+        .filter((state) => state.status === "source-changed")
+        .map((state) => state.head.id),
+    ),
+    [reviewLibraryStatesBySourceKey],
+  );
+  const sourceChangedReviewIds = useMemo(
+    () => new Set(
+      Array.from(reviewLibraryStatesBySourceKey.values())
+        .filter((state) => state.status === "source-changed" && state.source)
+        .map((state) => state.source!.id),
+    ),
+    [reviewLibraryStatesBySourceKey],
+  );
+  const selectedReviewLibraryState = useMemo<ReviewLibraryReaderState | null>(() => {
+    const sourceKey = selectedItem?.origin?.kind === "daily-review"
+      ? selectedItem.origin.sourceKey
+      : "";
+    const state = sourceKey ? reviewLibraryStatesBySourceKey.get(sourceKey) : undefined;
+    if (!state) return null;
+    const reviewTypeLabel = state.source?.reviewKind === "combined"
+      ? "综合回顾"
+      : state.source?.reviewKind === "auto-work"
+        ? "自动工作回顾"
+        : state.source
+          ? "单来源回顾"
+          : undefined;
+    return {
+      ...state,
+      ...(reviewTypeLabel ? { reviewTypeLabel } : {}),
+    };
+  }, [reviewLibraryStatesBySourceKey, selectedItem]);
   const editorDirty = useMemo(() => {
     if (!isEditing || !draft || !selectedItem) return false;
     const draftValue = sanitizeItemDraft(draft, tagText);
@@ -1056,10 +1109,11 @@ export default function App() {
     setItems(loadedItems);
     setFolders(loadedFolders);
     applyTodayDashboardIfCurrent(dashboardSeq, loadedDashboard);
+    const loadedVisibleItems = getVisibleDailyReviewLibraryItems(loadedItems);
     setSelectedId((current) => {
       if (nextSelectedId) return nextSelectedId;
       if (loadedItems.some((item) => item.id === current)) return current;
-      return loadedItems[0]?.id ?? "";
+      return loadedVisibleItems[0]?.id ?? "";
     });
     setSearchRefreshKey((key) => key + 1);
   };
@@ -1415,6 +1469,8 @@ export default function App() {
   };
 
   const selectViewNow = (view: ActiveView) => {
+    setReviewLibraryNavigation(null);
+    setTodayAutoWorkReviewOpenRequestKey(0);
     if (view.kind === "memory" && !view.subView) {
       setActiveView({ kind: "memory", subView: "document" });
     } else {
@@ -1481,8 +1537,9 @@ export default function App() {
     return handleSelectView({ kind: "memory", subView: "ai-review" });
   };
 
-  const handleSelectItem = async (item: Item) => {
+  const handleSelectItem = async (item: Item, preserveReviewNavigation = false) => {
     if (blockUnsavedEditorNavigation()) return;
+    if (!preserveReviewNavigation) setReviewLibraryNavigation(null);
     const fallbackView: ListView = item.folderId ? { kind: "folder", folderId: item.folderId } : { kind: "smart", id: "unfiled" };
     if (activeView.kind === "folder" || activeView.kind === "smart") {
       setLastListView(activeView);
@@ -1507,6 +1564,8 @@ export default function App() {
 
   const handlePreviewLibraryItem = async (item: Item) => {
     if (blockUnsavedEditorNavigation()) return;
+    setReviewLibraryNavigation(null);
+    setTodayAutoWorkReviewOpenRequestKey(0);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 1279px)").matches) {
       await handleSelectItem(item);
       return;
@@ -1788,15 +1847,41 @@ export default function App() {
       confirmLabel: "删除",
       danger: true,
       onConfirm: async () => {
+        const sourceKey = selectedItem.origin?.kind === "daily-review"
+          ? selectedItem.origin.sourceKey
+          : "";
         clearItemEditorDraft(selectedItem.id);
         await deleteItem(selectedItem.id);
         const remainingItems = items.filter((item) => item.id !== selectedItem.id);
-        await refreshLibraryData(remainingItems[0]?.id);
+        const remainingVisibleItems = getVisibleDailyReviewLibraryItems(remainingItems);
+        const remainingHead = sourceKey
+          ? getDailyReviewLibraryHead(remainingItems, sourceKey)
+          : undefined;
+        await refreshLibraryData(remainingHead?.id ?? remainingVisibleItems[0]?.id);
         await refreshLinks();
-        setActiveView(lastListView);
         setDraft(null);
         setTagText("");
         setIsEditing(false);
+        if (remainingHead) {
+          await handleSelectItem(
+            remainingHead,
+            reviewLibraryNavigation?.kind === "return-review",
+          );
+          return;
+        }
+        if (reviewLibraryNavigation?.kind === "return-review") {
+          const navigation = reviewLibraryNavigation;
+          setReviewLibraryNavigation(null);
+          if (navigation.surface === "today") {
+            setActiveView({ kind: "today" });
+            setTodayAutoWorkReviewOpenRequestKey((current) => current + 1);
+          } else {
+            setActiveView({ kind: "memory", subView: "archive", reviewId: navigation.reviewId });
+          }
+          return;
+        }
+        setReviewLibraryNavigation(null);
+        setActiveView(lastListView);
       },
     });
   };
@@ -3209,7 +3294,10 @@ export default function App() {
     setReviewPublishInitialDraft(null);
   };
 
-  const handlePublishDailyReview = async (reviewId: string) => {
+  const handlePublishDailyReview = async (
+    reviewId: string,
+    returnSurface: "memory" | "today" = "memory",
+  ) => {
     try {
       const latestReview = await getDailyConversationReviewById(reviewId);
       if (!latestReview) {
@@ -3217,11 +3305,18 @@ export default function App() {
         return;
       }
 
-      const existingItem = items.find(
-        (item) => item.origin?.kind === "daily-review" && item.origin.sourceKey === latestReview.reviewKey,
-      );
+      const existingItem = getDailyReviewLibraryHead(items, latestReview.reviewKey);
       if (existingItem) {
-        await handleSelectItem(existingItem);
+        if (
+          reviewLibraryNavigation?.kind === "return-item"
+          && reviewLibraryNavigation.reviewId === reviewId
+        ) {
+          setReviewLibraryNavigation(null);
+          await handleSelectItem(existingItem);
+          return;
+        }
+        setReviewLibraryNavigation({ kind: "return-review", reviewId, surface: returnSurface });
+        await handleSelectItem(existingItem, true);
         return;
       }
 
@@ -3232,6 +3327,7 @@ export default function App() {
       setReviewPublishSource(latestReview);
       setReviewPublishDraft(initialDraft);
       setReviewPublishInitialDraft(initialDraft);
+      setReviewPublishReturnSurface(returnSurface);
     } catch (publishError) {
       setError(getSafeErrorMessage(publishError, "打开回顾资料草稿失败。"));
     }
@@ -3239,10 +3335,110 @@ export default function App() {
 
   const handleSaveReviewPublishDraft = async () => {
     if (!reviewPublishDraft || !reviewPublishSource) return;
+    const sourceReviewId = reviewPublishSource.id;
     const result = await publishDailyReviewToLibrary(reviewPublishDraft);
     await refreshLibraryData(result.item.id);
+    setReviewLibraryNavigation({
+      kind: "return-review",
+      reviewId: sourceReviewId,
+      surface: reviewPublishReturnSurface,
+    });
     closeReviewPublishDialog();
-    await handleSelectItem(result.item);
+    await handleSelectItem(result.item, true);
+  };
+
+  const handleOpenReviewSource = (reviewId: string) => {
+    if (!selectedItem) return;
+    setReviewLibraryNavigation({ kind: "return-item", itemId: selectedItem.id, reviewId });
+    setActiveView({ kind: "memory", subView: "archive", reviewId });
+    setIsEditing(false);
+    setDraft(null);
+  };
+
+  const handleReviewReaderClose = (reviewId: string) => {
+    const navigation = reviewLibraryNavigation;
+    if (navigation?.kind === "return-item" && navigation.reviewId === reviewId) {
+      const item = items.find((candidate) => candidate.id === navigation.itemId);
+      setReviewLibraryNavigation(null);
+      if (item) {
+        void handleSelectItem(item);
+        return;
+      }
+    }
+    setActiveView({ kind: "memory", subView: "archive" });
+  };
+
+  const handleBackFromReviewLibraryItem = () => {
+    const navigation = reviewLibraryNavigation;
+    if (navigation?.kind !== "return-review") {
+      handleSelectView(lastListView);
+      return;
+    }
+    setReviewLibraryNavigation(null);
+    if (navigation.surface === "today") {
+      setActiveView({ kind: "today" });
+      setTodayAutoWorkReviewOpenRequestKey((current) => current + 1);
+      return;
+    }
+    setActiveView({ kind: "memory", subView: "archive", reviewId: navigation.reviewId });
+  };
+
+  const handleOpenReviewLibraryItem = async (itemId: string) => {
+    const target = items.find((item) => item.id === itemId);
+    if (!target) throw new Error("找不到这份资料版本，请刷新后重试。");
+    await handleSelectItem(target, true);
+  };
+
+  const handleApplyReviewLibraryUpdate: NonNullable<ItemReaderProps["onApplyReviewLibraryUpdate"]> = async (
+    mode,
+    finalDraft,
+    context,
+  ) => {
+    const result = await applyDailyReviewLibraryUpdate({
+      mode,
+      itemId: context.item.id,
+      expectedItemUpdatedAt: context.item.updatedAt,
+      expectedItemContentVersion: createReviewContentVersion(context.item.title, context.item.content),
+      expectedRecordedSourceVersion: context.item.origin?.contentVersion ?? "",
+      expectedHeadId: context.item.id,
+      expectedHeadRevision: getDailyReviewLibraryRevision(context.item),
+      expectedHeadUpdatedAt: context.item.updatedAt,
+      expectedHeadItemContentVersion: createReviewContentVersion(context.item.title, context.item.content),
+      expectedHeadRecordedSourceVersion: context.item.origin?.contentVersion ?? "",
+      sourceId: context.source.id,
+      sourceKey: context.source.reviewKey,
+      expectedSourceVersion: createReviewContentVersion(context.source.title, context.source.content),
+      title: finalDraft.title,
+      content: finalDraft.content,
+    });
+    await refreshLibraryData(result.item.id);
+    await handleSelectItem(result.item, true);
+  };
+
+  const handleRestoreReviewLibraryVersion: NonNullable<ItemReaderProps["onRestoreReviewLibraryVersion"]> = async (
+    version,
+    expectedCurrentItem,
+  ) => {
+    if (version.origin?.kind !== "daily-review" || expectedCurrentItem.origin?.kind !== "daily-review") {
+      throw new Error("这份资料不属于回顾版本链。");
+    }
+    const result = await restoreDailyReviewLibraryVersion({
+      itemId: version.id,
+      expectedItemUpdatedAt: version.updatedAt,
+      expectedItemContentVersion: createReviewContentVersion(version.title, version.content),
+      expectedRecordedSourceVersion: version.origin.contentVersion,
+      expectedHeadId: expectedCurrentItem.id,
+      expectedHeadRevision: getDailyReviewLibraryRevision(expectedCurrentItem),
+      expectedHeadUpdatedAt: expectedCurrentItem.updatedAt,
+      expectedHeadItemContentVersion: createReviewContentVersion(
+        expectedCurrentItem.title,
+        expectedCurrentItem.content,
+      ),
+      expectedHeadRecordedSourceVersion: expectedCurrentItem.origin.contentVersion,
+      sourceKey: version.origin.sourceKey,
+    });
+    await refreshLibraryData(result.item.id);
+    await handleSelectItem(result.item, true);
   };
 
   const handleUpdateDailyReviewDraft = async (id: string, patch: Partial<DailyReviewReplacementDraft>) => {
@@ -3479,6 +3675,8 @@ export default function App() {
   };
 
   const handleOpenEntity = (kind: EntityKind, id: string) => {
+    setReviewLibraryNavigation(null);
+    setTodayAutoWorkReviewOpenRequestKey(0);
     if (kind === "item") {
       const item = items.find((currentItem) => currentItem.id === id);
       if (item) {
@@ -3524,6 +3722,8 @@ export default function App() {
   };
 
   const handleOpenSearchResult = (result: SearchResult) => {
+    setReviewLibraryNavigation(null);
+    setTodayAutoWorkReviewOpenRequestKey(0);
     const route = result.route;
     if (!route) {
       handleOpenEntity(result.kind, result.id);
@@ -3576,7 +3776,8 @@ export default function App() {
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <Sidebar
           folders={folders}
-          items={items}
+          items={visibleItems}
+          sourceChangedItemIds={sourceChangedItemIds}
           activeView={activeView}
           selectedItemId={selectedItem?.id}
           collapsed={libraryViewActive ? layout.libraryDirectoryCollapsed : layout.sidebarCollapsed}
@@ -3630,6 +3831,8 @@ export default function App() {
               autoWorkReviewProgress={autoWorkReviewProgress}
               codexReviews={codexReviews}
               publishedReviewItemIds={publishedReviewItemIds}
+              sourceChangedReviewIds={sourceChangedReviewIds}
+              autoWorkReviewOpenRequestKey={todayAutoWorkReviewOpenRequestKey}
               memoryPatchDrafts={memoryPatchDrafts}
               conversationGenerationDrafts={conversationGenerationDrafts}
               onCreateJournalEntry={handleCreateJournalEntry}
@@ -3641,7 +3844,11 @@ export default function App() {
               onOpenSettings={() => handleSelectView({ kind: "settings" })}
               onRunAutoWorkReview={handleRunAutoWorkReview}
               onArchiveRollingWorkReview={handleArchiveRollingWorkReview}
-              onPublishDailyReview={handlePublishDailyReview}
+              onPublishDailyReview={(reviewId) => handlePublishDailyReview(reviewId, "today")}
+              onAutoWorkReviewReaderClose={() => {
+                setReviewLibraryNavigation(null);
+                setTodayAutoWorkReviewOpenRequestKey(0);
+              }}
               onReplaceCodexSessionIndex={handleReplaceCodexSessionIndex}
               onGenerateCodexReview={handleGenerateCodexReview}
               onGenerateCombinedReview={handleGenerateCombinedReview}
@@ -3682,6 +3889,7 @@ export default function App() {
               reports={summaryReports}
               codexReviews={codexReviews}
               publishedReviewItemIds={publishedReviewItemIds}
+              sourceChangedReviewIds={sourceChangedReviewIds}
               rollingWorkReviews={rollingWorkReviews}
               codexSessionIndex={codexSessionIndex}
               dailyReviewDrafts={dailyReviewDrafts}
@@ -3717,7 +3925,8 @@ export default function App() {
               onApplyDailyReviewDraft={handleApplyDailyReviewDraft}
               onIgnoreDailyReviewDraft={handleIgnoreDailyReviewDraft}
               onArchiveRollingWorkReview={handleArchiveRollingWorkReview}
-              onPublishDailyReview={handlePublishDailyReview}
+              onPublishDailyReview={(reviewId) => handlePublishDailyReview(reviewId, "memory")}
+              onReviewReaderClose={handleReviewReaderClose}
               onSaveMemoryDocument={handleSaveMemoryDocument}
               onApplyMemoryPatch={handleApplyMemoryPatch}
               onIgnoreMemoryPatch={handleIgnoreMemoryPatch}
@@ -3755,7 +3964,8 @@ export default function App() {
               links={links}
               aiRunningAction={aiRunningAction}
               aiRunState={aiRunState?.itemId === selectedItem?.id ? aiRunState : null}
-              onBackToList={() => handleSelectView(lastListView)}
+              backLabel={reviewLibraryNavigation?.kind === "return-review" ? "返回回顾" : "返回列表"}
+              onBackToList={handleBackFromReviewLibraryItem}
               onEdit={handleStartEdit}
               onCreate={handleCreateItem}
               onDelete={handleDeleteSelected}
@@ -3767,6 +3977,11 @@ export default function App() {
               onCreateLink={handleCreateLink}
               onDeleteLink={handleDeleteLink}
               onOpenEntity={handleOpenEntity}
+              reviewLibraryState={selectedReviewLibraryState}
+              onOpenReviewSource={handleOpenReviewSource}
+              onOpenReviewLibraryItem={handleOpenReviewLibraryItem}
+              onApplyReviewLibraryUpdate={handleApplyReviewLibraryUpdate}
+              onRestoreReviewLibraryVersion={handleRestoreReviewLibraryVersion}
             />
           ) : (
             <div className="flex h-full min-h-0 flex-col">
@@ -3791,7 +4006,7 @@ export default function App() {
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                     <LibrarySmartToolbar
-                      items={items}
+                      items={visibleItems}
                       activeView={activeView}
                       onSelectView={(view) => handleSelectView({ kind: "smart", id: view })}
                     />
@@ -3815,7 +4030,7 @@ export default function App() {
 
               <MobileLibrarySwitcher
                 folders={folders}
-                items={items}
+                items={visibleItems}
                 activeView={activeView}
                 selectedItem={selectedItem}
                 onSelectView={handleSelectView}
@@ -3835,7 +4050,8 @@ export default function App() {
                 >
                   <ItemList
                     items={filteredItems}
-                    allItems={items}
+                    allItems={visibleItems}
+                    sourceChangedItemIds={sourceChangedItemIds}
                     folders={folders}
                     activeView={activeView}
                     selectedId={selectedItem?.id ?? ""}
@@ -3870,7 +4086,8 @@ export default function App() {
                     aiRunningAction={aiRunningAction}
                     aiRunState={aiRunState?.itemId === selectedItem?.id ? aiRunState : null}
                     showBackButton={false}
-                    onBackToList={() => handleSelectView(lastListView)}
+                    backLabel={reviewLibraryNavigation?.kind === "return-review" ? "返回回顾" : "返回列表"}
+                    onBackToList={handleBackFromReviewLibraryItem}
                     onEdit={handleStartEdit}
                     onCreate={handleCreateItem}
                     onDelete={handleDeleteSelected}
@@ -3882,6 +4099,11 @@ export default function App() {
                     onCreateLink={handleCreateLink}
                     onDeleteLink={handleDeleteLink}
                     onOpenEntity={handleOpenEntity}
+                    reviewLibraryState={selectedReviewLibraryState}
+                    onOpenReviewSource={handleOpenReviewSource}
+                    onOpenReviewLibraryItem={handleOpenReviewLibraryItem}
+                    onApplyReviewLibraryUpdate={handleApplyReviewLibraryUpdate}
+                    onRestoreReviewLibraryVersion={handleRestoreReviewLibraryVersion}
                   />
                 </div>
               </div>

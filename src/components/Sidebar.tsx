@@ -39,6 +39,7 @@ type SidebarProps = {
   onToggleCollapsed: () => void;
   onResizeStart: (event: ReactMouseEvent) => void;
   onResetLayout: () => void;
+  sourceChangedItemIds?: ReadonlySet<string>;
 };
 
 export function Sidebar({
@@ -57,6 +58,7 @@ export function Sidebar({
   onToggleCollapsed,
   onResizeStart,
   onResetLayout,
+  sourceChangedItemIds,
 }: SidebarProps) {
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(folders.filter((folder) => !folder.parentId).map((folder) => folder.id)),
@@ -159,7 +161,8 @@ export function Sidebar({
                       itemCounts={itemCounts}
                       activeView={activeView}
                       selectedItemId={selectedItemId}
-                      showItemLeaves={false}
+                      showItemLeaves={showItemLeaves}
+                      sourceChangedItemIds={sourceChangedItemIds}
                       depth={0}
                       onToggle={toggleFolder}
                       onSelectView={onSelectView}
@@ -467,6 +470,7 @@ type FolderRowProps = {
   activeView: ActiveView;
   selectedItemId?: string;
   showItemLeaves: boolean;
+  sourceChangedItemIds?: ReadonlySet<string>;
   depth: number;
   onToggle: (id: string) => void;
   onSelectView: (view: ActiveView) => void;
@@ -485,6 +489,7 @@ function FolderRow({
   activeView,
   selectedItemId,
   showItemLeaves,
+  sourceChangedItemIds,
   depth,
   onToggle,
   onSelectView,
@@ -621,6 +626,7 @@ function FolderRow({
               activeView={activeView}
               selectedItemId={selectedItemId}
               showItemLeaves={showItemLeaves}
+              sourceChangedItemIds={sourceChangedItemIds}
               depth={depth + 1}
               onToggle={onToggle}
               onSelectView={onSelectView}
@@ -636,6 +642,7 @@ function FolderRow({
               item={item}
               active={activeView.kind === "item" && activeView.itemId === item.id}
               selected={selectedItemId === item.id}
+              sourceChanged={sourceChangedItemIds?.has(item.id) ?? false}
               depth={depth + 1}
               onSelectItem={onSelectItem}
             />
@@ -650,12 +657,14 @@ function ItemLeaf({
   item,
   active,
   selected,
+  sourceChanged,
   depth,
   onSelectItem,
 }: {
   item: Item;
   active: boolean;
   selected: boolean;
+  sourceChanged: boolean;
   depth: number;
   onSelectItem: (item: Item) => void;
 }) {
@@ -673,6 +682,9 @@ function ItemLeaf({
     >
       <ItemIcon size={13} className="shrink-0" />
       <span className="truncate">{item.title}</span>
+      {sourceChanged ? (
+        <span className="ml-auto shrink-0 whitespace-nowrap text-[10px] font-medium text-copper">来源有更新</span>
+      ) : null}
     </button>
   );
 }

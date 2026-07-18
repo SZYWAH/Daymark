@@ -34,6 +34,14 @@ import {
 } from "../types";
 import { getThemeMode, saveThemeMode } from "../lib/theme";
 import { createReviewContentVersion } from "../lib/memorySuggestion";
+import {
+  getDailyReviewLibraryHead,
+  getDailyReviewLibraryLineage,
+  getDailyReviewLibraryRevision,
+  getDailyReviewLibraryRevisionKind,
+  getVisibleDailyReviewLibraryItems,
+  resolveDailyReviewLibraryState,
+} from "../lib/reviewLibraryPublication";
 import { filterDemoLibraryFromBackup } from "./demoLibraryModel";
 
 const DB_NAME = "personal-knowledge-base";
@@ -96,6 +104,39 @@ export type PublishDailyReviewToLibraryInput = {
   content: string;
   tags: string[];
   folderId?: string;
+};
+export type ApplyDailyReviewLibraryUpdateInput = {
+  mode: "update-current" | "create-version";
+  itemId: string;
+  expectedItemUpdatedAt: string;
+  expectedItemContentVersion: string;
+  expectedRecordedSourceVersion: string;
+  expectedHeadId: string;
+  expectedHeadRevision: number;
+  expectedHeadUpdatedAt: string;
+  expectedHeadItemContentVersion: string;
+  expectedHeadRecordedSourceVersion: string;
+  sourceId: string;
+  sourceKey: string;
+  expectedSourceVersion: string;
+  title: string;
+  content: string;
+};
+export type RestoreDailyReviewLibraryVersionInput = {
+  itemId: string;
+  expectedItemUpdatedAt: string;
+  expectedItemContentVersion: string;
+  expectedRecordedSourceVersion: string;
+  expectedHeadId: string;
+  expectedHeadRevision: number;
+  expectedHeadUpdatedAt: string;
+  expectedHeadItemContentVersion: string;
+  expectedHeadRecordedSourceVersion: string;
+  sourceKey: string;
+};
+export type DailyReviewLibraryMutationResult = {
+  item: Item;
+  created: boolean;
 };
 type CreateDailyReviewReplacementDraftInput = Omit<DailyReviewReplacementDraft, "id" | "createdAt" | "updatedAt">;
 type DailyReviewReplacementDraftPatch = Partial<Omit<DailyReviewReplacementDraft, "id" | "createdAt" | "updatedAt">>;
@@ -770,6 +811,21 @@ function validateOptionalItemOrigin(value: unknown, label: string) {
   requireStringField(value, "sourceDate", label);
   requireStringField(value, "sourceLabel", label);
   requireStringField(value, "contentVersion", label);
+  if (value.revision !== undefined) {
+    requirePositiveIntegerField(value, "revision", label);
+  }
+  if (value.revisionKind !== undefined) {
+    const revisionKind = requireStringField(value, "revisionKind", label);
+    if (revisionKind !== "source" && revisionKind !== "restore" && revisionKind !== "reactivation") {
+      throw new Error(`备份字段 ${label}.revisionKind 无效。`);
+    }
+  }
+  if (value.derivedFromRevision !== undefined) {
+    requirePositiveIntegerField(value, "derivedFromRevision", label);
+  }
+  if (value.syncedItemContentVersion !== undefined) {
+    requireStringField(value, "syncedItemContentVersion", label);
+  }
 }
 
 function validateBackupFolder(record: Record<string, unknown>, label: string) {
@@ -834,6 +890,14 @@ function requireNumberField(record: Record<string, unknown>, field: string, labe
   const value = record[field];
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`备份字段 ${label}.${field} 必须是数字。`);
+  }
+  return value;
+}
+
+function requirePositiveIntegerField(record: Record<string, unknown>, field: string, label: string) {
+  const value = requireNumberField(record, field, label);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`备份字段 ${label}.${field} 必须是正整数。`);
   }
   return value;
 }
@@ -948,9 +1012,7 @@ export async function publishDailyReviewToLibrary(
     throw new Error("来源回顾已经更新，请重新打开并确认最新内容后再保存。");
   }
 
-  const existing = (await itemStore.getAll()).find(
-    (item) => item.origin?.kind === "daily-review" && item.origin.sourceKey === review.reviewKey,
-  );
+  const existing = getDailyReviewLibraryHead(await itemStore.getAll(), review.reviewKey);
   if (existing) {
     await tx.done;
     return { item: normalizeItem(existing), created: false };
@@ -965,6 +1027,9 @@ export async function publishDailyReviewToLibrary(
     sourceDate: review.date,
     sourceLabel: review.sourceLabel,
     contentVersion: sourceVersion,
+    revision: 1,
+    revisionKind: "source",
+    syncedItemContentVersion: createReviewContentVersion(title, content),
   };
   const item = normalizeItem({
     id: createId("item"),
@@ -986,6 +1051,378 @@ export async function publishDailyReviewToLibrary(
   await itemStore.put(item);
   await tx.done;
   return { item, created: true };
+}
+
+export async function applyDailyReviewLibraryUpdate(
+  input: ApplyDailyReviewLibraryUpdateInput,
+): Promise<DailyReviewLibraryMutationResult> {
+  const itemId = input.itemId.trim();
+  const sourceId = input.sourceId.trim();
+  const sourceKey = input.sourceKey.trim();
+  const expectedSourceVersion = input.expectedSourceVersion.trim();
+  const title = input.title.trim();
+  const content = input.content.trim();
+  validateDailyReviewLibraryMutationInput({
+    itemId,
+    sourceKey,
+    expectedSourceVersion,
+    title,
+    content,
+    expectedHeadRevision: input.expectedHeadRevision,
+  });
+  if (!sourceId) throw new Error("来源回顾不能为空。");
+
+  const db = await getDb();
+  const tx = db.transaction([ITEM_STORE, DAILY_CONVERSATION_REVIEW_STORE], "readwrite");
+  const itemStore = tx.objectStore(ITEM_STORE);
+  const reviewStore = tx.objectStore(DAILY_CONVERSATION_REVIEW_STORE);
+  const items = (await itemStore.getAll()).map(normalizeItem);
+  const lineage = getDailyReviewLibraryLineage(items, sourceKey);
+  if (!lineage) throw new Error("资料版本链不存在，请刷新后重试。");
+  const selectedItem = items.find((item) => item.id === itemId);
+  if (!selectedItem || selectedItem.origin?.kind !== "daily-review" || selectedItem.origin.sourceKey !== sourceKey) {
+    throw new Error("当前资料不存在或不属于该回顾，请刷新后重试。");
+  }
+  if (!matchesExpectedDailyReviewLibraryItem(selectedItem, {
+    id: itemId,
+    revision: getDailyReviewLibraryRevision(selectedItem),
+    updatedAt: input.expectedItemUpdatedAt,
+    itemContentVersion: input.expectedItemContentVersion,
+    recordedSourceVersion: input.expectedRecordedSourceVersion,
+  })) {
+    throw new Error("资料已被修改，请重新打开对比后再试。");
+  }
+
+  let source = await reviewStore.get(sourceId);
+  if (!source || source.reviewKey !== sourceKey) {
+    source = await reviewStore.index("by-reviewKey").get(sourceKey);
+  }
+  if (!source) throw new Error("来源回顾不存在，请重新打开回顾后再试。");
+  const sourceVersion = createReviewContentVersion(source.title, source.content);
+  if (sourceVersion !== expectedSourceVersion) {
+    throw new Error("来源回顾已经更新，请重新打开对比后再试。");
+  }
+
+  const finalItemVersion = createReviewContentVersion(title, content);
+  if (input.mode === "create-version") {
+    const duplicate = findRepeatedDailyReviewLibraryCreation(
+      lineage.versions,
+      lineage.head,
+      input,
+      sourceVersion,
+      finalItemVersion,
+    );
+    if (duplicate) {
+      await tx.done;
+      return { item: duplicate, created: false };
+    }
+    if (lineage.head.origin?.contentVersion === sourceVersion) {
+      throw new Error("当前资料已经对应这版来源，但确认内容与现有版本不同，请重新打开对比后再试。");
+    }
+  } else if (
+    lineage.head.id === itemId
+    && lineage.head.origin?.contentVersion === sourceVersion
+    && lineage.head.origin.syncedItemContentVersion === finalItemVersion
+    && createReviewContentVersion(lineage.head.title, lineage.head.content) === finalItemVersion
+  ) {
+    assertDailyReviewLibraryExpectedHead(lineage.head, input);
+    await tx.done;
+    return { item: lineage.head, created: false };
+  }
+
+  assertDailyReviewLibraryExpectedHead(lineage.head, input);
+  if (selectedItem.id !== lineage.head.id) {
+    throw new Error("只能更新或另存当前资料版本，请先打开当前版本。");
+  }
+  const previousSourceSnapshot = lineage.history.find(
+    (item) => item.origin?.kind === "daily-review" && item.origin.contentVersion === sourceVersion,
+  );
+  const revisionKind = previousSourceSnapshot ? "reactivation" as const : "source" as const;
+  const derivedFromRevision = previousSourceSnapshot
+    ? getDailyReviewLibraryRevision(previousSourceSnapshot)
+    : undefined;
+  const now = formatTimestamp();
+
+  if (input.mode === "update-current") {
+    const currentOrigin = lineage.head.origin;
+    if (currentOrigin?.kind !== "daily-review") {
+      throw new Error("当前资料版本缺少回顾来源，请刷新后重试。");
+    }
+    const updated = normalizeItem({
+      ...lineage.head,
+      title,
+      content,
+      updatedAt: now,
+      origin: {
+        ...currentOrigin,
+        kind: "daily-review",
+        sourceId: source.id,
+        sourceKey: source.reviewKey,
+        sourceDate: source.date,
+        sourceLabel: source.sourceLabel,
+        contentVersion: sourceVersion,
+        revision: getDailyReviewLibraryRevision(lineage.head),
+        revisionKind: currentOrigin.revisionKind,
+        derivedFromRevision: currentOrigin.derivedFromRevision,
+        syncedItemContentVersion: finalItemVersion,
+      },
+    });
+    await itemStore.put(updated);
+    await tx.done;
+    return { item: updated, created: false };
+  }
+
+  const created = createDailyReviewLibraryVersionItem({
+    head: lineage.head,
+    title,
+    content,
+    now,
+    origin: {
+      kind: "daily-review",
+      sourceId: source.id,
+      sourceKey: source.reviewKey,
+      sourceDate: source.date,
+      sourceLabel: source.sourceLabel,
+      contentVersion: sourceVersion,
+      revision: getDailyReviewLibraryRevision(lineage.head) + 1,
+      revisionKind,
+      derivedFromRevision,
+      syncedItemContentVersion: finalItemVersion,
+    },
+  });
+  await itemStore.put(created);
+  await tx.done;
+  return { item: created, created: true };
+}
+
+export async function restoreDailyReviewLibraryVersion(
+  input: RestoreDailyReviewLibraryVersionInput,
+): Promise<DailyReviewLibraryMutationResult> {
+  const itemId = input.itemId.trim();
+  const sourceKey = input.sourceKey.trim();
+  validateDailyReviewLibraryMutationInput({
+    itemId,
+    sourceKey,
+    expectedSourceVersion: "restore",
+    title: "restore",
+    content: "restore",
+    expectedHeadRevision: input.expectedHeadRevision,
+  });
+
+  const db = await getDb();
+  const tx = db.transaction(ITEM_STORE, "readwrite");
+  const itemStore = tx.objectStore(ITEM_STORE);
+  const items = (await itemStore.getAll()).map(normalizeItem);
+  const lineage = getDailyReviewLibraryLineage(items, sourceKey);
+  if (!lineage) throw new Error("资料版本链不存在，请刷新后重试。");
+  const selectedItem = items.find((item) => item.id === itemId);
+  if (!selectedItem || selectedItem.origin?.kind !== "daily-review" || selectedItem.origin.sourceKey !== sourceKey) {
+    throw new Error("要恢复的历史版本不存在，请刷新后重试。");
+  }
+  if (!matchesExpectedDailyReviewLibraryItem(selectedItem, {
+    id: itemId,
+    revision: getDailyReviewLibraryRevision(selectedItem),
+    updatedAt: input.expectedItemUpdatedAt,
+    itemContentVersion: input.expectedItemContentVersion,
+    recordedSourceVersion: input.expectedRecordedSourceVersion,
+  })) {
+    throw new Error("要恢复的历史版本已被修改，请重新确认后再试。");
+  }
+
+  const restoredItemVersion = createReviewContentVersion(selectedItem.title, selectedItem.content);
+  const duplicate = findRepeatedDailyReviewLibraryRestore(
+    lineage.versions,
+    lineage.head,
+    selectedItem,
+    input,
+    restoredItemVersion,
+  );
+  if (duplicate) {
+    await tx.done;
+    return { item: duplicate, created: false };
+  }
+
+  assertDailyReviewLibraryExpectedHead(lineage.head, input);
+  if (selectedItem.id === lineage.head.id) {
+    throw new Error("当前版本无需恢复，请选择一个历史版本。");
+  }
+
+  const now = formatTimestamp();
+  const restored = createDailyReviewLibraryVersionItem({
+    head: lineage.head,
+    title: selectedItem.title,
+    content: selectedItem.content,
+    now,
+    origin: {
+      ...selectedItem.origin,
+      revision: getDailyReviewLibraryRevision(lineage.head) + 1,
+      revisionKind: "restore",
+      derivedFromRevision: getDailyReviewLibraryRevision(selectedItem),
+      syncedItemContentVersion: restoredItemVersion,
+    },
+  });
+  await itemStore.put(restored);
+  await tx.done;
+  return { item: restored, created: true };
+}
+
+function validateDailyReviewLibraryMutationInput(input: {
+  itemId: string;
+  sourceKey: string;
+  expectedSourceVersion: string;
+  title: string;
+  content: string;
+  expectedHeadRevision: number;
+}) {
+  if (!input.itemId) throw new Error("资料不能为空。");
+  if (!input.sourceKey) throw new Error("回顾来源不能为空。");
+  if (!input.expectedSourceVersion) throw new Error("回顾来源版本不能为空。");
+  if (!input.title) throw new Error("资料标题不能为空。");
+  if (!input.content) throw new Error("资料正文不能为空。");
+  if (!Number.isSafeInteger(input.expectedHeadRevision) || input.expectedHeadRevision < 1) {
+    throw new Error("资料头版本无效，请刷新后重试。");
+  }
+}
+
+function assertDailyReviewLibraryExpectedHead(
+  head: Item,
+  input: Pick<
+    ApplyDailyReviewLibraryUpdateInput,
+    | "expectedHeadId"
+    | "expectedHeadRevision"
+    | "expectedHeadUpdatedAt"
+    | "expectedHeadItemContentVersion"
+    | "expectedHeadRecordedSourceVersion"
+  >,
+) {
+  if (!matchesExpectedDailyReviewLibraryItem(head, {
+    id: input.expectedHeadId,
+    revision: input.expectedHeadRevision,
+    updatedAt: input.expectedHeadUpdatedAt,
+    itemContentVersion: input.expectedHeadItemContentVersion,
+    recordedSourceVersion: input.expectedHeadRecordedSourceVersion,
+  })) {
+    throw new Error("当前资料版本已经变化，请刷新版本历史后再试。");
+  }
+}
+
+function matchesExpectedDailyReviewLibraryItem(
+  item: Item,
+  expected: {
+    id: string;
+    revision: number;
+    updatedAt: string;
+    itemContentVersion: string;
+    recordedSourceVersion: string;
+  },
+) {
+  return item.id === expected.id
+    && getDailyReviewLibraryRevision(item) === expected.revision
+    && item.updatedAt === expected.updatedAt
+    && createReviewContentVersion(item.title, item.content) === expected.itemContentVersion
+    && item.origin?.kind === "daily-review"
+    && item.origin.contentVersion === expected.recordedSourceVersion;
+}
+
+function findRepeatedDailyReviewLibraryCreation(
+  versions: Item[],
+  head: Item,
+  input: ApplyDailyReviewLibraryUpdateInput,
+  sourceVersion: string,
+  finalItemVersion: string,
+) {
+  if (head.origin?.contentVersion === sourceVersion) {
+    if (
+      matchesExpectedDailyReviewLibraryItem(head, {
+        id: input.expectedHeadId,
+        revision: input.expectedHeadRevision,
+        updatedAt: input.expectedHeadUpdatedAt,
+        itemContentVersion: input.expectedHeadItemContentVersion,
+        recordedSourceVersion: input.expectedHeadRecordedSourceVersion,
+      })
+      && head.origin.syncedItemContentVersion === finalItemVersion
+      && createReviewContentVersion(head.title, head.content) === finalItemVersion
+    ) {
+      return head;
+    }
+    const previousHeadExists = versions.some(
+      (item) => matchesExpectedDailyReviewLibraryItem(item, {
+        id: input.expectedHeadId,
+        revision: input.expectedHeadRevision,
+        updatedAt: input.expectedHeadUpdatedAt,
+        itemContentVersion: input.expectedHeadItemContentVersion,
+        recordedSourceVersion: input.expectedHeadRecordedSourceVersion,
+      }),
+    );
+    if (
+      previousHeadExists
+      && getDailyReviewLibraryRevision(head) === input.expectedHeadRevision + 1
+      && getDailyReviewLibraryRevisionKind(head) !== "restore"
+      && head.updatedAt === head.createdAt
+      && head.origin.syncedItemContentVersion === finalItemVersion
+      && createReviewContentVersion(head.title, head.content) === finalItemVersion
+    ) {
+      return head;
+    }
+  }
+  return undefined;
+}
+
+function findRepeatedDailyReviewLibraryRestore(
+  versions: Item[],
+  head: Item,
+  selectedItem: Item,
+  input: RestoreDailyReviewLibraryVersionInput,
+  restoredItemVersion: string,
+) {
+  if (head.id === input.expectedHeadId) return undefined;
+  const previousHeadExists = versions.some(
+    (item) => matchesExpectedDailyReviewLibraryItem(item, {
+      id: input.expectedHeadId,
+      revision: input.expectedHeadRevision,
+      updatedAt: input.expectedHeadUpdatedAt,
+      itemContentVersion: input.expectedHeadItemContentVersion,
+      recordedSourceVersion: input.expectedHeadRecordedSourceVersion,
+    }),
+  );
+  if (
+    previousHeadExists
+    && getDailyReviewLibraryRevision(head) === input.expectedHeadRevision + 1
+    && getDailyReviewLibraryRevisionKind(head) === "restore"
+    && head.updatedAt === head.createdAt
+    && head.origin?.derivedFromRevision === getDailyReviewLibraryRevision(selectedItem)
+    && head.origin.contentVersion === selectedItem.origin?.contentVersion
+    && head.origin.syncedItemContentVersion === restoredItemVersion
+    && createReviewContentVersion(head.title, head.content) === restoredItemVersion
+  ) {
+    return head;
+  }
+  return undefined;
+}
+
+function createDailyReviewLibraryVersionItem(input: {
+  head: Item;
+  title: string;
+  content: string;
+  now: string;
+  origin: ItemOrigin;
+}) {
+  return normalizeItem({
+    id: createId("item"),
+    title: input.title,
+    type: "note",
+    processStatus: input.head.processStatus,
+    readingStatus: input.head.readingStatus,
+    folderId: input.head.folderId,
+    tags: [...input.head.tags],
+    content: input.content,
+    aiSummary: `来自 ${input.origin.sourceDate} ${input.origin.sourceLabel} AI 回顾。`,
+    todos: [],
+    createdAt: input.now,
+    updatedAt: input.now,
+    favorite: false,
+    origin: input.origin,
+  });
 }
 
 export async function createItemWithKnowledgeLink(
@@ -1955,8 +2392,16 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
   if (!normalizedQuery) return results;
 
   const snapshot = await getSearchSnapshot();
+  const visibleItems = getVisibleDailyReviewLibraryItems(snapshot.items);
+  const reviewLibraryStates = new Map(
+    visibleItems.flatMap((item) => {
+      if (item.origin?.kind !== "daily-review") return [];
+      const state = resolveDailyReviewLibraryState(snapshot.items, snapshot.conversationReviews, item.origin.sourceKey);
+      return state ? [[item.origin.sourceKey, state] as const] : [];
+    }),
+  );
   results.item = buildSearchGroup(
-    snapshot.items,
+    visibleItems,
     normalizedQuery,
     (item) => ({
       kind: "item",
@@ -1972,6 +2417,10 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
         ...(item.todos ?? []),
       ].join(" "),
       updatedAt: item.updatedAt,
+      statusLabel: item.origin?.kind === "daily-review"
+        && reviewLibraryStates.get(item.origin.sourceKey)?.status === "source-changed"
+        ? "来源有更新"
+        : undefined,
       route: { kind: "item", itemId: item.id },
     }),
     offsetByKind.item ?? 0,
@@ -2031,9 +2480,6 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
     offsetByKind.memory ?? 0,
     limitPerKind,
   );
-  const publishedReviewKeys = new Set(
-    snapshot.items.flatMap((item) => item.origin?.kind === "daily-review" ? [item.origin.sourceKey] : []),
-  );
   const summarySearchRecords = [
     ...snapshot.summaryReports.map((report) => ({
       id: report.id,
@@ -2046,8 +2492,12 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
           : ({ kind: "memory" as const, subView: "archive" as const, summaryId: report.id }),
     })),
     ...snapshot.conversationReviews
-      .filter((review) => !publishedReviewKeys.has(review.reviewKey))
       .map((review) => ({
+        review,
+        libraryState: resolveDailyReviewLibraryState(snapshot.items, snapshot.conversationReviews, review.reviewKey),
+      }))
+      .filter(({ libraryState }) => !libraryState || libraryState.status === "source-changed")
+      .map(({ review, libraryState }) => ({
       id: review.id,
       title: review.title || `${review.sourceLabel} 回顾`,
       snippetSource: [
@@ -2059,6 +2509,7 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
         review.sourceKind ?? "",
       ].join(" "),
       updatedAt: review.updatedAt,
+      statusLabel: libraryState?.status === "source-changed" ? "有更新" : undefined,
       route: { kind: "memory" as const, subView: "archive" as const, reviewId: review.id },
     })),
     ...snapshot.dailyReviewDrafts.filter((draft) => draft.status === "pending").map((draft) => ({
@@ -2093,6 +2544,7 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
       title: report.title,
       snippetSource: report.snippetSource,
       updatedAt: report.updatedAt,
+      statusLabel: "statusLabel" in report ? report.statusLabel : undefined,
       route: report.route,
     }),
     offsetByKind.summary ?? 0,
@@ -2104,6 +2556,7 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
 
 export async function getTodayDashboardData(): Promise<TodayDashboardData> {
   const [items, journalEntries, memoryCards] = await Promise.all([getItems(), getJournalEntries(), getMemoryCards()]);
+  const visibleItems = getVisibleDailyReviewLibraryItems(items);
   const todayKey = formatDateKey(new Date());
   const readingStatuses: ReadingStatus[] = ["待阅读", "阅读中", "需复习"];
   const todayJournalEntries = journalEntries.filter((entry) => entry.entryDate.slice(0, 10) === todayKey);
@@ -2115,8 +2568,8 @@ export async function getTodayDashboardData(): Promise<TodayDashboardData> {
       entryDate: entry.entryDate,
     })),
   );
-  const pendingItems = items.filter((item) => item.processStatus === "待整理");
-  const readingItems = items.filter((item) => readingStatuses.includes(item.readingStatus));
+  const pendingItems = visibleItems.filter((item) => item.processStatus === "待整理");
+  const readingItems = visibleItems.filter((item) => readingStatuses.includes(item.readingStatus));
   const candidateMemories = memoryCards.filter((memory) => memory.status === "candidate");
 
   return {
@@ -2318,6 +2771,7 @@ function buildSearchGroup<T>(
     title: string;
     snippetSource: string;
     updatedAt: string;
+    statusLabel?: string;
     route?: SearchResult["route"];
   },
   offset: number,
@@ -2336,6 +2790,7 @@ function buildSearchGroup<T>(
       title: redactSensitiveSearchText(selected.title),
       snippet: createSearchSnippet(selected.snippetSource, query),
       updatedAt: selected.updatedAt,
+      statusLabel: selected.statusLabel,
       route: selected.route,
     });
   }

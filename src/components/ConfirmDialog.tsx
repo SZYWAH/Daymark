@@ -32,6 +32,9 @@ export function ConfirmDialog({
   const [error, setError] = useState("");
   const titleId = useId();
   const messageId = useId();
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -40,11 +43,48 @@ export function ConfirmDialog({
       return undefined;
     }
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onCancel();
+    previouslyFocusedRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusTimer = window.setTimeout(() => cancelButtonRef.current?.focus(), 0);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      const previous = previouslyFocusedRef.current;
+      previouslyFocusedRef.current = null;
+      if (previous?.isConnected) window.setTimeout(() => previous.focus(), 0);
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = getFocusableElements(dialogRef.current);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialogRef.current?.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [busy, onCancel, open]);
 
   if (!open) return null;
@@ -69,6 +109,7 @@ export function ConfirmDialog({
         aria-labelledby={titleId}
         aria-modal="true"
         className="modal-surface max-h-[min(92vh,540px)] w-full max-w-md overflow-y-auto p-5 scrollbar-thin"
+        ref={dialogRef}
         role={danger ? "alertdialog" : "dialog"}
       >
         <div className="flex items-start gap-3">
@@ -100,7 +141,7 @@ export function ConfirmDialog({
           )}
         </div>
         <div className="mt-5 flex justify-end gap-2">
-          <button className="secondary-action action-standard" disabled={busy} onClick={onCancel}>
+          <button className="secondary-action action-standard" disabled={busy} onClick={onCancel} ref={cancelButtonRef}>
             {cancelLabel}
           </button>
           {secondaryLabel && onSecondary && (
@@ -121,6 +162,15 @@ export function ConfirmDialog({
       </section>
     </div>
   );
+}
+
+function getFocusableElements(container: HTMLElement | null) {
+  if (!container) return [];
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])",
+    ),
+  ).filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
 }
 
 type PromptDialogProps = {

@@ -10,8 +10,10 @@ import {
   FileText,
   FolderKanban,
   FolderOpen,
+  GitCompareArrows,
   Globe2,
   Heading1,
+  History,
   Image,
   Link2,
   ListChecks,
@@ -26,15 +28,24 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FolderPicker } from "./FolderPicker";
 import { LinkPanel } from "./LinkPanel";
 import { SelectMenu } from "./SelectMenu";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { checkLocalPath, openExternalUrl, openLocalPath, revealLocalPath, type PathStatus } from "../lib/desktop";
 import { getFolderPath } from "../lib/folders";
 import { getSafeErrorMessage } from "../lib/redaction";
+import {
+  getDailyReviewLibraryRevision,
+  getDailyReviewLibraryRevisionKind,
+  isDailyReviewLibraryItemEdited,
+  type DailyReviewLibraryRevisionKind,
+  type DailyReviewLibraryState,
+} from "../lib/reviewLibraryPublication";
 import {
   PROCESS_STATUSES,
   READING_STATUSES,
   type AiAction,
   type AiRunDisplayState,
   type AiRunReceipt,
+  type DailyConversationReview,
   type EntityKind,
   type FolderNode,
   type Item,
@@ -46,8 +57,19 @@ import {
   type ReadingStatus,
   type SummaryReport,
 } from "../types";
+import { ReviewLibraryHistoryDialog } from "./ReviewLibraryHistoryDialog";
+import {
+  ReviewLibraryUpdateDialog,
+  type ReviewLibraryUpdateContext,
+  type ReviewLibraryUpdateDraft,
+  type ReviewLibraryUpdateMode,
+} from "./ReviewLibraryUpdateDialog";
 
-type ItemReaderProps = {
+export type ReviewLibraryReaderState = DailyReviewLibraryState & {
+  reviewTypeLabel?: string;
+};
+
+export type ItemReaderProps = {
   item?: Item;
   folders: FolderNode[];
   items: Item[];
@@ -58,6 +80,7 @@ type ItemReaderProps = {
   aiRunningAction: AiAction | null;
   aiRunState: AiRunDisplayState | null;
   showBackButton?: boolean;
+  backLabel?: string;
   onBackToList: () => void;
   onEdit: () => void;
   onCreate: () => void;
@@ -70,6 +93,15 @@ type ItemReaderProps = {
   onCreateLink: (input: Omit<KnowledgeLink, "id" | "createdAt">) => Promise<void>;
   onDeleteLink: (id: string) => Promise<void>;
   onOpenEntity: (kind: EntityKind, id: string) => void;
+  reviewLibraryState?: ReviewLibraryReaderState | null;
+  onOpenReviewSource?: (reviewId: string) => Promise<void> | void;
+  onOpenReviewLibraryItem?: (itemId: string) => Promise<void> | void;
+  onApplyReviewLibraryUpdate?: (
+    mode: ReviewLibraryUpdateMode,
+    draft: ReviewLibraryUpdateDraft,
+    context: ReviewLibraryUpdateContext,
+  ) => Promise<void> | void;
+  onRestoreReviewLibraryVersion?: (version: Item, expectedCurrentItem: Item) => Promise<void> | void;
 };
 
 const PROCESS_ORGANIZED = PROCESS_STATUSES[2];
@@ -106,6 +138,7 @@ export function ItemReader({
   aiRunningAction,
   aiRunState,
   showBackButton = true,
+  backLabel = "返回列表",
   onBackToList,
   onEdit,
   onCreate,
@@ -118,10 +151,17 @@ export function ItemReader({
   onCreateLink,
   onDeleteLink,
   onOpenEntity,
+  reviewLibraryState,
+  onOpenReviewSource,
+  onOpenReviewLibraryItem,
+  onApplyReviewLibraryUpdate,
+  onRestoreReviewLibraryVersion,
 }: ItemReaderProps) {
   const [pathStatus, setPathStatus] = useState<PathStatus | null>(null);
   const [fileActionMessage, setFileActionMessage] = useState("");
   const [readerMessage, setReaderMessage] = useState("");
+  const [reviewUpdateOpen, setReviewUpdateOpen] = useState(false);
+  const [reviewHistoryOpen, setReviewHistoryOpen] = useState(false);
   const completionRef = useRef<HTMLDivElement | null>(null);
 
   const folderLabel = item?.folderId ? getFolderPath(folders, item.folderId).join(" / ") : "未归档";
@@ -216,6 +256,7 @@ export function ItemReader({
         item={item}
         folderLabel={folderLabel}
         showBackButton={showBackButton}
+        backLabel={backLabel}
         onBackToList={onBackToList}
         onEdit={onEdit}
         onToggleFavorite={handleToggleFavorite}
@@ -229,6 +270,19 @@ export function ItemReader({
               {item.content || "还没有正文内容。"}
             </div>
           </ReaderSection>
+
+          {item.origin?.kind === "daily-review" && reviewLibraryState && (
+            <ReviewLibrarySourceCard
+              item={item}
+              state={reviewLibraryState}
+              onOpenSource={onOpenReviewSource}
+              onOpenCurrent={onOpenReviewLibraryItem}
+              onOpenUpdate={() => setReviewUpdateOpen(true)}
+              onOpenHistory={() => setReviewHistoryOpen(true)}
+              onRestore={onRestoreReviewLibraryVersion}
+              canUpdate={Boolean(onApplyReviewLibraryUpdate)}
+            />
+          )}
 
           <ReaderWorkbench
             item={item}
@@ -295,6 +349,32 @@ export function ItemReader({
           />
         </main>
       </div>
+
+      <ReviewLibraryUpdateDialog
+        open={reviewUpdateOpen}
+        item={reviewLibraryState?.head ?? null}
+        source={reviewLibraryState?.source ?? null}
+        onClose={() => setReviewUpdateOpen(false)}
+        onSubmit={async (mode, draft, context) => {
+          if (!onApplyReviewLibraryUpdate) throw new Error("当前页面尚未接入资料更新操作。");
+          await onApplyReviewLibraryUpdate(mode, draft, context);
+        }}
+      />
+      <ReviewLibraryHistoryDialog
+        open={reviewHistoryOpen}
+        displayedItemId={item.id}
+        currentItem={reviewLibraryState?.head ?? null}
+        versions={reviewLibraryState?.versions ?? []}
+        onClose={() => setReviewHistoryOpen(false)}
+        onOpenItem={async (itemId) => {
+          if (!onOpenReviewLibraryItem) throw new Error("当前页面尚未接入资料版本导航。");
+          await onOpenReviewLibraryItem(itemId);
+        }}
+        onRestore={async (version, expectedCurrentItem) => {
+          if (!onRestoreReviewLibraryVersion) throw new Error("当前页面尚未接入资料版本恢复。");
+          await onRestoreReviewLibraryVersion(version, expectedCurrentItem);
+        }}
+      />
     </section>
   );
 }
@@ -303,6 +383,7 @@ function ReaderHero({
   item,
   folderLabel,
   showBackButton,
+  backLabel,
   onBackToList,
   onEdit,
   onToggleFavorite,
@@ -310,6 +391,7 @@ function ReaderHero({
   item: Item;
   folderLabel: string;
   showBackButton: boolean;
+  backLabel: string;
   onBackToList: () => void;
   onEdit: () => void;
   onToggleFavorite: () => void;
@@ -325,9 +407,9 @@ function ReaderHero({
         <div className="min-w-0 flex-1">
           <div className="mb-2 flex min-w-0 flex-wrap items-center gap-1.5">
             {showBackButton && (
-              <button className="soft-button action-compact mr-1" onClick={onBackToList}>
+              <button className="soft-button action-compact mr-1" onClick={onBackToList} aria-label={backLabel} title={backLabel}>
                 <PanelLeft size={14} />
-                返回列表
+                {backLabel}
               </button>
             )}
             <span className={`inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] font-medium ${meta.color}`}>
@@ -564,6 +646,174 @@ function ReaderSection({ icon: Icon, title, children }: { icon: LucideIcon; titl
       <div className="min-w-0">{children}</div>
     </section>
   );
+}
+
+function ReviewLibrarySourceCard({
+  item,
+  state,
+  canUpdate,
+  onOpenSource,
+  onOpenCurrent,
+  onOpenUpdate,
+  onOpenHistory,
+  onRestore,
+}: {
+  item: Item;
+  state: ReviewLibraryReaderState;
+  canUpdate: boolean;
+  onOpenSource?: (reviewId: string) => Promise<void> | void;
+  onOpenCurrent?: (itemId: string) => Promise<void> | void;
+  onOpenUpdate: () => void;
+  onOpenHistory: () => void;
+  onRestore?: (version: Item, expectedCurrentItem: Item) => Promise<void> | void;
+}) {
+  const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
+  const origin = item.origin;
+  const revision = getDailyReviewLibraryRevision(item);
+  const currentRevision = getDailyReviewLibraryRevision(state.head);
+  const isCurrent = item.id === state.head.id;
+  const itemEditedSinceSync = isDailyReviewLibraryItemEdited(item);
+  const sourceAvailable = Boolean(state.source);
+  const typeLabel = state.reviewTypeLabel
+    ?? (state.source ? getDailyReviewTypeLabel(state.source) : inferDailyReviewTypeLabel(origin?.sourceKey));
+
+  const statusMeta = !isCurrent
+    ? {
+        label: "历史版本",
+        className: "border-line bg-panel text-ink/58",
+        description: `当前版本为版本 ${currentRevision}；这个历史版本不会出现在普通资料列表和搜索结果中。`,
+      }
+    : state.status === "source-changed"
+      ? {
+          label: "来源有更新",
+          className: "border-copper/30 bg-copper/10 text-copper",
+          description: "正式回顾已经变化。资料不会自动覆盖，可先对比再决定更新方式。",
+        }
+      : state.status === "source-missing"
+        ? {
+            label: "来源缺失",
+            className: "border-line bg-panel text-ink/58",
+            description: "来源回顾不在本机，资料和版本历史仍可继续使用。",
+          }
+        : {
+            label: "已同步",
+            className: "border-moss/30 bg-moss/10 text-moss",
+            description: "资料对应当前正式回顾版本，后续变化仍需手动确认同步。",
+          };
+
+  return (
+    <ReaderSection icon={Link2} title="回顾来源">
+      <div className="rounded-[8px] border border-line bg-panel/65 p-4">
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusMeta.className}`}>{statusMeta.label}</span>
+              <span className="quiet-chip py-0.5 text-[11px]">版本 {revision}</span>
+              <span className="quiet-chip py-0.5 text-[11px]">{revisionKindLabel(getDailyReviewLibraryRevisionKind(item))}</span>
+              {itemEditedSinceSync && (
+                <span className="rounded-full border border-copper/30 bg-copper/10 px-2 py-0.5 text-[11px] font-medium text-copper">
+                  同步后有本地编辑
+                </span>
+              )}
+            </div>
+            <div className="mt-2 flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs leading-5 text-ink/48">
+              <span>日期：<span className="text-ink/68">{origin?.sourceDate || state.source?.date || "未知"}</span></span>
+              <span>来源：<span className="text-ink/68">{origin?.sourceLabel || state.source?.sourceLabel || "未知来源"}</span></span>
+              <span>类型：<span className="text-ink/68">{typeLabel}</span></span>
+              <span>共 <span className="text-ink/68">{Math.max(state.versions.length, 1)}</span> 个版本</span>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-ink/55">{statusMeta.description}</p>
+            {state.status === "source-missing" && (
+              <p className="mt-1 text-xs leading-5 text-ink/45" role="status">
+                来源回顾不在本机，查看原回顾和对比更新暂不可用。
+              </p>
+            )}
+            {itemEditedSinceSync && (
+              <p className="mt-1 text-xs leading-5 text-ink/45">本地编辑不会自动丢失；对比弹窗会让你确认最终写入内容。</p>
+            )}
+          </div>
+
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            {isCurrent ? (
+              <>
+                <button
+                  className="soft-button action-compact disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!sourceAvailable || !onOpenSource}
+                  onClick={() => {
+                    if (sourceAvailable && onOpenSource) void onOpenSource(state.source!.id);
+                  }}
+                  title={sourceAvailable ? "查看原回顾" : "来源回顾不在本机"}
+                >
+                  查看原回顾
+                </button>
+                {(state.status === "source-changed" || state.status === "source-missing") && (
+                  <button
+                    className="primary-button action-compact disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!canUpdate || !sourceAvailable}
+                    onClick={onOpenUpdate}
+                    title={sourceAvailable ? "对比最新来源并选择更新方式" : "来源回顾不在本机"}
+                  >
+                    <GitCompareArrows size={14} />
+                    对比更新
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                {onOpenCurrent && (
+                  <button className="secondary-action action-compact" onClick={() => void onOpenCurrent(state.head.id)}>
+                    打开当前版本
+                  </button>
+                )}
+                {onRestore && (
+                  <button className="primary-button action-compact" onClick={() => setRestoreConfirmOpen(true)}>
+                    恢复为新版本
+                  </button>
+                )}
+              </>
+            )}
+            <button className="soft-button action-compact" onClick={onOpenHistory}>
+              <History size={14} />
+              版本历史
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={restoreConfirmOpen}
+        title={`恢复版本 ${revision}？`}
+        message="将以这个历史版本当前的标题和正文创建新版本；正式回顾、当前资料和已有历史版本都不会被修改。"
+        confirmLabel="恢复为新版本"
+        onCancel={() => setRestoreConfirmOpen(false)}
+        onConfirm={async () => {
+          if (!onRestore) return;
+          await onRestore(item, state.head);
+          setRestoreConfirmOpen(false);
+        }}
+      />
+    </ReaderSection>
+  );
+}
+
+function getDailyReviewTypeLabel(review: DailyConversationReview) {
+  if (review.reviewKind === "combined") return "综合回顾";
+  if (review.reviewKind === "auto-work") return "自动工作回顾";
+  return "单来源回顾";
+}
+
+function inferDailyReviewTypeLabel(sourceKey?: string) {
+  const reviewKind = sourceKey?.split(":")[1];
+  if (reviewKind === "combined") return "综合回顾";
+  if (reviewKind === "auto-work") return "自动工作回顾";
+  if (reviewKind === "source") return "单来源回顾";
+  return "AI 每日回顾";
+}
+
+function revisionKindLabel(kind: DailyReviewLibraryRevisionKind) {
+  if (kind === "restore") return "恢复版本";
+  if (kind === "reactivation") return "重新启用";
+  return "来源版本";
 }
 
 function AttachmentStrip({

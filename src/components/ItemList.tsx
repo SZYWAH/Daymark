@@ -27,6 +27,7 @@ type ItemListProps = {
   onCollapse?: () => void;
   onSelectItem: (item: Item) => void;
   compact?: boolean;
+  sourceChangedItemIds?: ReadonlySet<string>;
 };
 
 const statuses: Array<ProcessStatus | "all"> = ["all", ...PROCESS_STATUSES];
@@ -47,6 +48,7 @@ export function ItemList({
   onCollapse,
   onSelectItem,
   compact = false,
+  sourceChangedItemIds,
 }: ItemListProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLDivElement | null>(null);
@@ -175,6 +177,7 @@ export function ItemList({
               item={item}
               folders={folders}
               selected={selectedId === item.id}
+              sourceChanged={sourceChangedItemIds?.has(item.id) ?? false}
               onClick={() => onSelectItem(item)}
             />
           ))
@@ -212,11 +215,13 @@ function ItemCard({
   item,
   folders,
   selected,
+  sourceChanged,
   onClick,
 }: {
   item: Item;
   folders: FolderNode[];
   selected: boolean;
+  sourceChanged: boolean;
   onClick: () => void;
 }) {
   const meta = typeMeta[item.type];
@@ -254,6 +259,9 @@ function ItemCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          {sourceChanged ? (
+            <span className="quiet-chip whitespace-nowrap py-0.5 text-[10px] font-medium text-copper">来源有更新</span>
+          ) : null}
           <span className="text-[11px] text-ink/60">{item.processStatus}</span>
           {item.favorite ? <Star size={14} className="fill-copper text-copper" /> : null}
         </div>

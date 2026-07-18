@@ -103,6 +103,7 @@ type MemoryPageProps = {
   reports: SummaryReport[];
   codexReviews: CodexDailyReview[];
   publishedReviewItemIds: Record<string, string>;
+  sourceChangedReviewIds: ReadonlySet<string>;
   rollingWorkReviews: RollingWorkReview[];
   codexSessionIndex: CodexSessionIndex[];
   dailyReviewDrafts: DailyReviewReplacementDraft[];
@@ -145,6 +146,7 @@ type MemoryPageProps = {
   onIgnoreDailyReviewDraft: (id: string) => Promise<void>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
   onPublishDailyReview: (reviewId: string) => Promise<void> | void;
+  onReviewReaderClose?: (reviewId: string) => void;
   onSaveMemoryDocument: (content: string, options: MemoryDocumentSaveOptions) => Promise<MemoryDocument>;
   onApplyMemoryPatch: (
     id: string,
@@ -161,6 +163,7 @@ export function MemoryPage({
   reports,
   codexReviews,
   publishedReviewItemIds,
+  sourceChangedReviewIds,
   rollingWorkReviews,
   codexSessionIndex,
   dailyReviewDrafts,
@@ -195,6 +198,7 @@ export function MemoryPage({
   onIgnoreDailyReviewDraft,
   onArchiveRollingWorkReview,
   onPublishDailyReview,
+  onReviewReaderClose,
   onSaveMemoryDocument,
   onApplyMemoryPatch,
   onIgnoreMemoryPatch,
@@ -229,6 +233,14 @@ export function MemoryPage({
       setSubView("archive");
     }
   }, [initialMemoryId, initialReviewDraftId, initialReviewId, initialSummaryId]);
+
+  useEffect(() => {
+    if (!initialReviewId) return;
+    const target = codexReviews.find(
+      (review) => review.id === initialReviewId && review.reviewKind !== "auto-work",
+    );
+    if (target) setActiveReview(target);
+  }, [codexReviews, initialReviewId]);
 
   return (
     <PageWorkspace
@@ -268,6 +280,7 @@ export function MemoryPage({
                 dailyReviewDrafts={dailyReviewDrafts}
                 memoryPatchDrafts={pendingPatchDrafts}
                 publishedReviewItemIds={publishedReviewItemIds}
+                sourceChangedReviewIds={sourceChangedReviewIds}
                 targetReviewId={initialReviewId}
                 targetReviewDraftId={initialReviewDraftId}
                 targetSummaryId={initialSummaryId}
@@ -280,6 +293,7 @@ export function MemoryPage({
                 onIgnoreDailyReviewDraft={onIgnoreDailyReviewDraft}
                 onArchiveRollingWorkReview={onArchiveRollingWorkReview}
                 onPublishDailyReview={onPublishDailyReview}
+                onReviewReaderClose={onReviewReaderClose}
               />
             </div>
           )}
@@ -350,8 +364,13 @@ export function MemoryPage({
           memoryPatchDraft={pendingPatchDrafts.find((draft) => draft.sourceReviewId === activeReview.id)}
           onGenerateMemorySuggestion={onGenerateMemorySuggestion}
           publishedItemId={publishedReviewItemIds[activeReview.id]}
+          publishedItemSourceChanged={sourceChangedReviewIds.has(activeReview.id)}
           onPublishDailyReview={onPublishDailyReview}
-          onClose={() => setActiveReview(null)}
+          onClose={() => {
+            const reviewId = activeReview.id;
+            setActiveReview(null);
+            onReviewReaderClose?.(reviewId);
+          }}
           onSave={onUpdateCodexReview}
         />
       )}
@@ -1623,6 +1642,7 @@ function ReviewArchivePanel({
   reports,
   codexReviews,
   publishedReviewItemIds,
+  sourceChangedReviewIds,
   rollingWorkReviews,
   dailyReviewDrafts,
   memoryPatchDrafts,
@@ -1638,6 +1658,7 @@ function ReviewArchivePanel({
   onIgnoreDailyReviewDraft,
   onArchiveRollingWorkReview,
   onPublishDailyReview,
+  onReviewReaderClose,
 }: {
   reports: SummaryReport[];
   codexReviews: CodexDailyReview[];
@@ -1645,6 +1666,7 @@ function ReviewArchivePanel({
   dailyReviewDrafts: DailyReviewReplacementDraft[];
   memoryPatchDrafts: MemoryPatchDraft[];
   publishedReviewItemIds: Record<string, string>;
+  sourceChangedReviewIds: ReadonlySet<string>;
   targetReviewId?: string;
   targetReviewDraftId?: string;
   targetSummaryId?: string;
@@ -1668,6 +1690,7 @@ function ReviewArchivePanel({
   onIgnoreDailyReviewDraft: (id: string) => Promise<void>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
   onPublishDailyReview: (reviewId: string) => Promise<void> | void;
+  onReviewReaderClose?: (reviewId: string) => void;
 }) {
   const [combiningDate, setCombiningDate] = useState("");
   const [message, setMessage] = useState("");
@@ -1704,6 +1727,18 @@ function ReviewArchivePanel({
     const latest = rollingWorkReviews.find((review) => review.date === activeRollingReview.date);
     if (latest && latest !== activeRollingReview) setActiveRollingReview(latest);
   }, [activeRollingReview, rollingWorkReviews]);
+
+  useEffect(() => {
+    if (!targetReviewId) return;
+    const archivedReview = codexReviews.find(
+      (review) => review.id === targetReviewId && review.reviewKind === "auto-work",
+    );
+    if (!archivedReview) return;
+    const rollingReview = rollingWorkReviews.find(
+      (review) => review.archiveReviewId === archivedReview.id || review.date === archivedReview.date,
+    );
+    if (rollingReview) setActiveRollingReview(rollingReview);
+  }, [codexReviews, rollingWorkReviews, targetReviewId]);
 
   const sourceGroups = useMemo(() => {
     const map = new Map<string, CodexDailyReview[]>();
@@ -2052,9 +2087,17 @@ function ReviewArchivePanel({
           publishedItemId={activeRollingReview.archiveReviewId
             ? publishedReviewItemIds[activeRollingReview.archiveReviewId]
             : undefined}
+          publishedItemSourceChanged={Boolean(
+            activeRollingReview.archiveReviewId
+              && sourceChangedReviewIds.has(activeRollingReview.archiveReviewId)
+          )}
           onArchive={() => void archiveRollingReview(activeRollingReview)}
           onPublishDailyReview={onPublishDailyReview}
-          onClose={() => setActiveRollingReview(null)}
+          onClose={() => {
+            const reviewId = activeRollingReview.archiveReviewId;
+            setActiveRollingReview(null);
+            if (reviewId) onReviewReaderClose?.(reviewId);
+          }}
         />
       )}
       {selectedDraft && (
@@ -2353,6 +2396,7 @@ function RollingWorkReviewArchiveOverlay({
   review,
   archiving,
   publishedItemId,
+  publishedItemSourceChanged,
   onArchive,
   onPublishDailyReview,
   onClose,
@@ -2360,6 +2404,7 @@ function RollingWorkReviewArchiveOverlay({
   review: RollingWorkReview;
   archiving: boolean;
   publishedItemId?: string;
+  publishedItemSourceChanged?: boolean;
   onArchive: () => void;
   onPublishDailyReview: (reviewId: string) => Promise<void> | void;
   onClose: () => void;
@@ -2375,6 +2420,9 @@ function RollingWorkReviewArchiveOverlay({
           {` · ${review.processedSessionCount} 次会话增量 · ${review.processedChars.toLocaleString("zh-CN")} 字符`}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {publishedItemSourceChanged && (
+            <span className="quiet-chip py-0.5 text-[11px] text-copper">资料待同步</span>
+          )}
           {review.archiveReviewId && (
             <button
               className="soft-button action-compact"
@@ -2452,6 +2500,7 @@ function ReviewReaderOverlay({
   settings,
   memoryPatchDraft,
   publishedItemId,
+  publishedItemSourceChanged,
   onGenerateMemorySuggestion,
   onPublishDailyReview,
   onClose,
@@ -2461,6 +2510,7 @@ function ReviewReaderOverlay({
   settings: AiSettings | null;
   memoryPatchDraft?: MemoryPatchDraft;
   publishedItemId?: string;
+  publishedItemSourceChanged?: boolean;
   onGenerateMemorySuggestion: (
     source: ReviewMemorySuggestionSource,
     onProgress?: (progress: CodexReviewProgress) => void,
@@ -2754,6 +2804,9 @@ function ReviewReaderOverlay({
             )}
           </div>
           <div className="flex flex-wrap gap-2">
+            {publishedItemSourceChanged && (
+              <span className="quiet-chip self-center py-1 text-[11px] text-copper">资料待同步</span>
+            )}
             {dirty && (
               <button
                 className="soft-button action-standard text-xs"

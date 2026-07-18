@@ -23,6 +23,10 @@ export type ItemOrigin = {
   sourceDate: string;
   sourceLabel: string;
   contentVersion: string;
+  revision?: number;
+  revisionKind?: "source" | "restore" | "reactivation";
+  derivedFromRevision?: number;
+  syncedItemContentVersion?: string;
 };
 
 export type Item = {
@@ -214,6 +218,7 @@ export type SearchResult = {
   title: string;
   snippet: string;
   updatedAt: string;
+  statusLabel?: string;
   route?: SearchResultRoute;
 };
 

@@ -73,6 +73,8 @@ type TodayPageProps = {
   autoWorkReviewProgress: CodexReviewProgress | null;
   codexReviews: CodexDailyReview[];
   publishedReviewItemIds: Record<string, string>;
+  sourceChangedReviewIds: ReadonlySet<string>;
+  autoWorkReviewOpenRequestKey?: number;
   memoryPatchDrafts: MemoryPatchDraft[];
   conversationGenerationDrafts: ConversationGenerationDraft[];
   onCreateJournalEntry: (input: { content: string; tags: string[]; todos: string[]; entryDate?: string }) => Promise<void>;
@@ -85,6 +87,7 @@ type TodayPageProps = {
   onRunAutoWorkReview: () => Promise<unknown>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
   onPublishDailyReview: (reviewId: string) => Promise<void> | void;
+  onAutoWorkReviewReaderClose?: (reviewId: string) => void;
   onReplaceCodexSessionIndex: (records: CodexSessionIndex[]) => Promise<void>;
   onGenerateCodexReview: (
     input: CodexReviewInput,
@@ -138,6 +141,8 @@ export function TodayPage({
   autoWorkReviewProgress,
   codexReviews,
   publishedReviewItemIds,
+  sourceChangedReviewIds,
+  autoWorkReviewOpenRequestKey,
   memoryPatchDrafts,
   conversationGenerationDrafts,
   onCreateJournalEntry,
@@ -150,6 +155,7 @@ export function TodayPage({
   onRunAutoWorkReview,
   onArchiveRollingWorkReview,
   onPublishDailyReview,
+  onAutoWorkReviewReaderClose,
   onReplaceCodexSessionIndex,
   onGenerateCodexReview,
   onGenerateCombinedReview,
@@ -182,6 +188,11 @@ export function TodayPage({
   useEffect(() => {
     writeTextDraft(TODAY_COMPOSER_DRAFT_KEY, content);
   }, [content]);
+
+  useEffect(() => {
+    if (!autoWorkReviewOpenRequestKey) return;
+    setDetailsPanel("review");
+  }, [autoWorkReviewOpenRequestKey]);
 
   const submit = async () => {
     const submittedContent = content;
@@ -284,6 +295,8 @@ export function TodayPage({
                       settings={settings}
                       codexReviews={codexReviews}
                       publishedReviewItemIds={publishedReviewItemIds}
+                      sourceChangedReviewIds={sourceChangedReviewIds}
+                      autoWorkReviewOpenRequestKey={autoWorkReviewOpenRequestKey}
                       memoryPatchDrafts={memoryPatchDrafts}
                       conversationGenerationDrafts={conversationGenerationDrafts}
                       autoWorkReviewSettings={autoWorkReviewSettings}
@@ -295,6 +308,7 @@ export function TodayPage({
                       onRunAutoWorkReview={onRunAutoWorkReview}
                       onArchiveRollingWorkReview={onArchiveRollingWorkReview}
                       onPublishDailyReview={onPublishDailyReview}
+                      onAutoWorkReviewReaderClose={onAutoWorkReviewReaderClose}
                       onReplaceCodexSessionIndex={onReplaceCodexSessionIndex}
                       onGenerateCodexReview={onGenerateCodexReview}
                       onGenerateCombinedReview={onGenerateCombinedReview}
@@ -585,6 +599,8 @@ function TodayReviewPanel({
   settings,
   codexReviews,
   publishedReviewItemIds,
+  sourceChangedReviewIds,
+  autoWorkReviewOpenRequestKey,
   memoryPatchDrafts,
   conversationGenerationDrafts,
   autoWorkReviewSettings,
@@ -596,6 +612,7 @@ function TodayReviewPanel({
   onRunAutoWorkReview,
   onArchiveRollingWorkReview,
   onPublishDailyReview,
+  onAutoWorkReviewReaderClose,
   onReplaceCodexSessionIndex,
   onGenerateCodexReview,
   onGenerateCombinedReview,
@@ -604,6 +621,8 @@ function TodayReviewPanel({
   settings: AiSettings | null;
   codexReviews: CodexDailyReview[];
   publishedReviewItemIds: Record<string, string>;
+  sourceChangedReviewIds: ReadonlySet<string>;
+  autoWorkReviewOpenRequestKey?: number;
   memoryPatchDrafts: MemoryPatchDraft[];
   conversationGenerationDrafts: ConversationGenerationDraft[];
   autoWorkReviewSettings: AutoWorkReviewSettings | null;
@@ -615,6 +634,7 @@ function TodayReviewPanel({
   onRunAutoWorkReview: () => Promise<unknown>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
   onPublishDailyReview: (reviewId: string) => Promise<void> | void;
+  onAutoWorkReviewReaderClose?: (reviewId: string) => void;
   onReplaceCodexSessionIndex: (records: CodexSessionIndex[]) => Promise<void>;
   onGenerateCodexReview: TodayPageProps["onGenerateCodexReview"];
   onGenerateCombinedReview: TodayPageProps["onGenerateCombinedReview"];
@@ -640,6 +660,11 @@ function TodayReviewPanel({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!autoWorkReviewOpenRequestKey || !rollingWorkReview?.content.trim()) return;
+    setWorkReviewOpen(true);
+  }, [autoWorkReviewOpenRequestKey, rollingWorkReview]);
 
   const todayReviews = useMemo(
     () => codexReviews.filter((review) => review.date === todayKey),
@@ -948,7 +973,15 @@ function TodayReviewPanel({
         publishedItemId={rollingWorkReview.archiveReviewId
           ? publishedReviewItemIds[rollingWorkReview.archiveReviewId]
           : undefined}
-        onClose={() => setWorkReviewOpen(false)}
+        publishedItemSourceChanged={Boolean(
+          rollingWorkReview.archiveReviewId
+            && sourceChangedReviewIds.has(rollingWorkReview.archiveReviewId)
+        )}
+        onClose={() => {
+          const reviewId = rollingWorkReview.archiveReviewId;
+          setWorkReviewOpen(false);
+          if (reviewId) onAutoWorkReviewReaderClose?.(reviewId);
+        }}
         onRun={onRunAutoWorkReview}
         onArchive={onArchiveRollingWorkReview}
         onPublishDailyReview={onPublishDailyReview}

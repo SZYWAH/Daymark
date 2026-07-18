@@ -54,6 +54,9 @@ describe("daily review publication", () => {
         sourceDate: review.date,
         sourceLabel: review.sourceLabel,
         contentVersion: input.expectedSourceVersion,
+        revision: 1,
+        revisionKind: "source",
+        syncedItemContentVersion: createReviewContentVersion(input.title, input.content),
       },
     });
     expect(savedReview).toEqual(review);

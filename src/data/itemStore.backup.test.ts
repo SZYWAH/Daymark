@@ -140,6 +140,39 @@ describe("core backup", () => {
     }))).toThrow(/origin\.kind/);
   });
 
+  it("validates and preserves optional daily-review version provenance in backup v1", async () => {
+    const versionedItem = {
+      ...makeItem("item-versioned-review", "Versioned review"),
+      origin: {
+        kind: "daily-review" as const,
+        sourceId: "review-source",
+        sourceKey: "2026-07-09:source:codex",
+        sourceDate: "2026-07-09",
+        sourceLabel: "Codex",
+        contentVersion: "source-version-2",
+        revision: 3,
+        revisionKind: "restore" as const,
+        derivedFromRevision: 1,
+        syncedItemContentVersion: "item-version-3",
+      },
+    };
+    const backup = makeBackup({ items: [versionedItem] });
+
+    expect(validateCoreBackup(backup).payload.items[0].origin).toEqual(versionedItem.origin);
+    await restoreCoreBackup(backup);
+    expect((await exportCoreBackup()).payload.items[0].origin).toEqual(versionedItem.origin);
+
+    expect(() => validateCoreBackup(makeBackup({
+      items: [{ ...versionedItem, origin: { ...versionedItem.origin, revision: 0 } }],
+    }))).toThrow(/revision.*正整数/);
+    expect(() => validateCoreBackup(makeBackup({
+      items: [{ ...versionedItem, origin: { ...versionedItem.origin, revisionKind: "branch" } }],
+    } as never))).toThrow(/revisionKind.*无效/);
+    expect(() => validateCoreBackup(makeBackup({
+      items: [{ ...versionedItem, origin: { ...versionedItem.origin, syncedItemContentVersion: "" } }],
+    }))).toThrow(/syncedItemContentVersion/);
+  });
+
   it("restores by replacing existing core data instead of merging", async () => {
     await createItem({ title: "Old item" });
     const restoredItem = makeItem("item-restored", "Restored item");

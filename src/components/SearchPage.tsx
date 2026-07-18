@@ -213,6 +213,11 @@ function SearchGroup({
           >
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <h3 className="min-w-0 flex-1 truncate text-anywhere text-sm font-semibold text-ink">{result.title}</h3>
+              {result.statusLabel ? (
+                <span className="quiet-chip shrink-0 whitespace-nowrap py-0.5 text-[10px] font-medium text-copper">
+                  {result.statusLabel}
+                </span>
+              ) : null}
               <span className="text-xs text-ink/38">{result.updatedAt}</span>
             </div>
             <BoundedPreview maxLinesClass="line-clamp-2" className="mt-1 text-sm leading-6 text-ink/58">

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BoundedPreview, ResultRow, ScrollableResultPanel } from "./ResultPanels";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { getSafeErrorMessage } from "../lib/redaction";
+import { getVisibleDailyReviewLibraryItems } from "../lib/reviewLibraryPublication";
 import type { EntityKind, Item, JournalEntry, KnowledgeLink, MemoryCard, SummaryReport } from "../types";
 
 type LinkInput = Omit<KnowledgeLink, "id" | "createdAt">;
@@ -86,18 +87,23 @@ export function LinkPanel({
     () => buildCandidates(items, journalEntries, memories, reports),
     [items, journalEntries, memories, reports],
   );
+  const linkableItemIds = useMemo(
+    () => new Set(getVisibleDailyReviewLibraryItems(items).map((item) => item.id)),
+    [items],
+  );
 
   const candidates = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     return allCandidates
       .filter((candidate) => !(candidate.kind === entityKind && candidate.id === entityId))
+      .filter((candidate) => candidate.kind !== "item" || linkableItemIds.has(candidate.id))
       .filter((candidate) => !isAlreadyLinked(relatedLinks, entityKind, entityId, candidate.kind, candidate.id))
       .filter((candidate) => {
         if (!keyword) return true;
         return `${candidate.title} ${candidate.subtitle}`.toLowerCase().includes(keyword);
       })
       .slice(0, 30);
-  }, [allCandidates, entityId, entityKind, query, relatedLinks]);
+  }, [allCandidates, entityId, entityKind, linkableItemIds, query, relatedLinks]);
 
   const createLink = async (candidate: LinkCandidate) => {
     if (savingRef.current) return;
