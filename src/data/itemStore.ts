@@ -15,6 +15,7 @@ import {
   type EntityKind,
   type FolderNode,
   type Item,
+  type ItemOrigin,
   type JournalEntry,
   type JournalTodo,
   type KnowledgeLink,
@@ -32,6 +33,7 @@ import {
   type TodayDashboardData,
 } from "../types";
 import { getThemeMode, saveThemeMode } from "../lib/theme";
+import { createReviewContentVersion } from "../lib/memorySuggestion";
 import { filterDemoLibraryFromBackup } from "./demoLibraryModel";
 
 const DB_NAME = "personal-knowledge-base";
@@ -87,6 +89,14 @@ type CreateCodexDailyReviewInput = {
 type CodexDailyReviewPatch = Partial<Omit<DailyConversationReview, "id" | "createdAt" | "updatedAt">>;
 type CreateDailyConversationReviewInput = Omit<DailyConversationReview, "id" | "createdAt" | "updatedAt">;
 type DailyConversationReviewPatch = Partial<Omit<DailyConversationReview, "id" | "createdAt" | "updatedAt">>;
+export type PublishDailyReviewToLibraryInput = {
+  reviewId: string;
+  expectedSourceVersion: string;
+  title: string;
+  content: string;
+  tags: string[];
+  folderId?: string;
+};
 type CreateDailyReviewReplacementDraftInput = Omit<DailyReviewReplacementDraft, "id" | "createdAt" | "updatedAt">;
 type DailyReviewReplacementDraftPatch = Partial<Omit<DailyReviewReplacementDraft, "id" | "createdAt" | "updatedAt">>;
 type CreateConversationGenerationDraftInput = Omit<ConversationGenerationDraft, "id" | "createdAt" | "updatedAt">;
@@ -743,6 +753,23 @@ function validateBackupItem(record: Record<string, unknown>, label: string) {
   requireStringField(record, "updatedAt", label);
   requireOptionalArrayField(record, "tags", label);
   requireOptionalArrayField(record, "todos", label);
+  validateOptionalItemOrigin(record.origin, `${label}.origin`);
+}
+
+function validateOptionalItemOrigin(value: unknown, label: string) {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    throw new Error(`备份字段 ${label} 必须是对象。`);
+  }
+  const kind = requireStringField(value, "kind", label);
+  if (kind !== "daily-review") {
+    throw new Error(`备份字段 ${label}.kind 无效。`);
+  }
+  requireStringField(value, "sourceId", label);
+  requireStringField(value, "sourceKey", label);
+  requireStringField(value, "sourceDate", label);
+  requireStringField(value, "sourceLabel", label);
+  requireStringField(value, "contentVersion", label);
 }
 
 function validateBackupFolder(record: Record<string, unknown>, label: string) {
@@ -892,6 +919,73 @@ export async function createItem(input: CreateItemInput = {}) {
   const normalized = normalizeItem(item);
   await db.put(ITEM_STORE, normalized);
   return normalized;
+}
+
+export async function publishDailyReviewToLibrary(
+  input: PublishDailyReviewToLibraryInput,
+): Promise<{ item: Item; created: boolean }> {
+  const reviewId = input.reviewId.trim();
+  const expectedSourceVersion = input.expectedSourceVersion.trim();
+  const title = input.title.trim();
+  const content = input.content.trim();
+
+  if (!reviewId) throw new Error("回顾来源不能为空。");
+  if (!expectedSourceVersion) throw new Error("回顾来源版本不能为空。");
+  if (!title) throw new Error("资料标题不能为空。");
+  if (!content) throw new Error("资料正文不能为空。");
+
+  const db = await getDb();
+  const tx = db.transaction([ITEM_STORE, DAILY_CONVERSATION_REVIEW_STORE], "readwrite");
+  const itemStore = tx.objectStore(ITEM_STORE);
+  const reviewStore = tx.objectStore(DAILY_CONVERSATION_REVIEW_STORE);
+  const review = await reviewStore.get(reviewId);
+  if (!review) {
+    throw new Error("来源回顾不存在，请重新打开回顾后再试。");
+  }
+
+  const sourceVersion = createReviewContentVersion(review.title, review.content);
+  if (sourceVersion !== expectedSourceVersion) {
+    throw new Error("来源回顾已经更新，请重新打开并确认最新内容后再保存。");
+  }
+
+  const existing = (await itemStore.getAll()).find(
+    (item) => item.origin?.kind === "daily-review" && item.origin.sourceKey === review.reviewKey,
+  );
+  if (existing) {
+    await tx.done;
+    return { item: normalizeItem(existing), created: false };
+  }
+
+  const now = formatTimestamp();
+  const folderId = input.folderId?.trim() || undefined;
+  const origin: ItemOrigin = {
+    kind: "daily-review",
+    sourceId: review.id,
+    sourceKey: review.reviewKey,
+    sourceDate: review.date,
+    sourceLabel: review.sourceLabel,
+    contentVersion: sourceVersion,
+  };
+  const item = normalizeItem({
+    id: createId("item"),
+    title,
+    type: "note",
+    processStatus: folderId ? "待整理" : "收件箱",
+    readingStatus: "不需要",
+    folderId,
+    tags: Array.from(new Set(input.tags.map((tag) => tag.trim()).filter(Boolean))),
+    content,
+    aiSummary: `来自 ${review.date} ${review.sourceLabel} AI 回顾。`,
+    todos: [],
+    createdAt: now,
+    updatedAt: now,
+    favorite: false,
+    origin,
+  });
+
+  await itemStore.put(item);
+  await tx.done;
+  return { item, created: true };
 }
 
 export async function createItemWithKnowledgeLink(
@@ -1266,6 +1360,11 @@ export async function getCodexDailyReviewByDate(date: string) {
 export async function getDailyConversationReviewByKey(reviewKey: string) {
   const db = await getDb();
   return db.getFromIndex(DAILY_CONVERSATION_REVIEW_STORE, "by-reviewKey", reviewKey);
+}
+
+export async function getDailyConversationReviewById(id: string) {
+  const db = await getDb();
+  return db.get(DAILY_CONVERSATION_REVIEW_STORE, id);
 }
 
 export async function getDailyConversationReviewsByDate(date: string) {
@@ -1932,6 +2031,9 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
     offsetByKind.memory ?? 0,
     limitPerKind,
   );
+  const publishedReviewKeys = new Set(
+    snapshot.items.flatMap((item) => item.origin?.kind === "daily-review" ? [item.origin.sourceKey] : []),
+  );
   const summarySearchRecords = [
     ...snapshot.summaryReports.map((report) => ({
       id: report.id,
@@ -1943,7 +2045,9 @@ export async function searchKnowledge(query: string, options: SearchOptions = {}
           ? ({ kind: "journal" as const, date: report.periodStart, summaryId: report.id })
           : ({ kind: "memory" as const, subView: "archive" as const, summaryId: report.id }),
     })),
-    ...snapshot.conversationReviews.map((review) => ({
+    ...snapshot.conversationReviews
+      .filter((review) => !publishedReviewKeys.has(review.reviewKey))
+      .map((review) => ({
       id: review.id,
       title: review.title || `${review.sourceLabel} 回顾`,
       snippetSource: [

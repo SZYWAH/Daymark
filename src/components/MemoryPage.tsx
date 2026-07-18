@@ -102,6 +102,7 @@ type MemoryPageProps = {
   memoryPatchDrafts: MemoryPatchDraft[];
   reports: SummaryReport[];
   codexReviews: CodexDailyReview[];
+  publishedReviewItemIds: Record<string, string>;
   rollingWorkReviews: RollingWorkReview[];
   codexSessionIndex: CodexSessionIndex[];
   dailyReviewDrafts: DailyReviewReplacementDraft[];
@@ -143,6 +144,7 @@ type MemoryPageProps = {
   onApplyDailyReviewDraft: (id: string) => Promise<void>;
   onIgnoreDailyReviewDraft: (id: string) => Promise<void>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
+  onPublishDailyReview: (reviewId: string) => Promise<void> | void;
   onSaveMemoryDocument: (content: string, options: MemoryDocumentSaveOptions) => Promise<MemoryDocument>;
   onApplyMemoryPatch: (
     id: string,
@@ -158,6 +160,7 @@ export function MemoryPage({
   memoryPatchDrafts,
   reports,
   codexReviews,
+  publishedReviewItemIds,
   rollingWorkReviews,
   codexSessionIndex,
   dailyReviewDrafts,
@@ -191,6 +194,7 @@ export function MemoryPage({
   onApplyDailyReviewDraft,
   onIgnoreDailyReviewDraft,
   onArchiveRollingWorkReview,
+  onPublishDailyReview,
   onSaveMemoryDocument,
   onApplyMemoryPatch,
   onIgnoreMemoryPatch,
@@ -263,6 +267,7 @@ export function MemoryPage({
                 rollingWorkReviews={rollingWorkReviews}
                 dailyReviewDrafts={dailyReviewDrafts}
                 memoryPatchDrafts={pendingPatchDrafts}
+                publishedReviewItemIds={publishedReviewItemIds}
                 targetReviewId={initialReviewId}
                 targetReviewDraftId={initialReviewDraftId}
                 targetSummaryId={initialSummaryId}
@@ -274,6 +279,7 @@ export function MemoryPage({
                 onApplyDailyReviewDraft={onApplyDailyReviewDraft}
                 onIgnoreDailyReviewDraft={onIgnoreDailyReviewDraft}
                 onArchiveRollingWorkReview={onArchiveRollingWorkReview}
+                onPublishDailyReview={onPublishDailyReview}
               />
             </div>
           )}
@@ -343,6 +349,8 @@ export function MemoryPage({
           settings={settings}
           memoryPatchDraft={pendingPatchDrafts.find((draft) => draft.sourceReviewId === activeReview.id)}
           onGenerateMemorySuggestion={onGenerateMemorySuggestion}
+          publishedItemId={publishedReviewItemIds[activeReview.id]}
+          onPublishDailyReview={onPublishDailyReview}
           onClose={() => setActiveReview(null)}
           onSave={onUpdateCodexReview}
         />
@@ -1614,6 +1622,7 @@ function CodexReviewWorkbench({
 function ReviewArchivePanel({
   reports,
   codexReviews,
+  publishedReviewItemIds,
   rollingWorkReviews,
   dailyReviewDrafts,
   memoryPatchDrafts,
@@ -1628,12 +1637,14 @@ function ReviewArchivePanel({
   onApplyDailyReviewDraft,
   onIgnoreDailyReviewDraft,
   onArchiveRollingWorkReview,
+  onPublishDailyReview,
 }: {
   reports: SummaryReport[];
   codexReviews: CodexDailyReview[];
   rollingWorkReviews: RollingWorkReview[];
   dailyReviewDrafts: DailyReviewReplacementDraft[];
   memoryPatchDrafts: MemoryPatchDraft[];
+  publishedReviewItemIds: Record<string, string>;
   targetReviewId?: string;
   targetReviewDraftId?: string;
   targetSummaryId?: string;
@@ -1656,6 +1667,7 @@ function ReviewArchivePanel({
   onApplyDailyReviewDraft: (id: string) => Promise<void>;
   onIgnoreDailyReviewDraft: (id: string) => Promise<void>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
+  onPublishDailyReview: (reviewId: string) => Promise<void> | void;
 }) {
   const [combiningDate, setCombiningDate] = useState("");
   const [message, setMessage] = useState("");
@@ -2037,7 +2049,11 @@ function ReviewArchivePanel({
         <RollingWorkReviewArchiveOverlay
           review={activeRollingReview}
           archiving={rollingArchiveDate === activeRollingReview.date}
+          publishedItemId={activeRollingReview.archiveReviewId
+            ? publishedReviewItemIds[activeRollingReview.archiveReviewId]
+            : undefined}
           onArchive={() => void archiveRollingReview(activeRollingReview)}
+          onPublishDailyReview={onPublishDailyReview}
           onClose={() => setActiveRollingReview(null)}
         />
       )}
@@ -2336,12 +2352,16 @@ function ReviewReplacementDraftOverlay({
 function RollingWorkReviewArchiveOverlay({
   review,
   archiving,
+  publishedItemId,
   onArchive,
+  onPublishDailyReview,
   onClose,
 }: {
   review: RollingWorkReview;
   archiving: boolean;
+  publishedItemId?: string;
   onArchive: () => void;
+  onPublishDailyReview: (reviewId: string) => Promise<void> | void;
   onClose: () => void;
 }) {
   const archived = Boolean(review.archiveReviewId);
@@ -2354,14 +2374,25 @@ function RollingWorkReviewArchiveOverlay({
           {review.lastRunAt ? ` · 更新于 ${review.lastRunAt}` : ""}
           {` · ${review.processedSessionCount} 次会话增量 · ${review.processedChars.toLocaleString("zh-CN")} 字符`}
         </div>
-        <button
-          className="primary-button action-compact disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={archived || archiving}
-          onClick={onArchive}
-        >
-          <Save size={13} />
-          {archived ? "已归档" : archiving ? "归档中" : "保存到回顾档案"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {review.archiveReviewId && (
+            <button
+              className="soft-button action-compact"
+              onClick={() => void onPublishDailyReview(review.archiveReviewId!)}
+            >
+              <BookOpenText size={13} />
+              {publishedItemId ? "查看资料" : "保存到资料库"}
+            </button>
+          )}
+          <button
+            className="primary-button action-compact disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={archived || archiving}
+            onClick={onArchive}
+          >
+            <Save size={13} />
+            {archived ? "已归档" : archiving ? "归档中" : "保存到回顾档案"}
+          </button>
+        </div>
       </div>
       <article className="whitespace-pre-wrap text-anywhere text-sm leading-7 text-ink/72">
         {review.content}
@@ -2420,18 +2451,22 @@ function ReviewReaderOverlay({
   review,
   settings,
   memoryPatchDraft,
+  publishedItemId,
   onGenerateMemorySuggestion,
+  onPublishDailyReview,
   onClose,
   onSave,
 }: {
   review: CodexDailyReview;
   settings: AiSettings | null;
   memoryPatchDraft?: MemoryPatchDraft;
+  publishedItemId?: string;
   onGenerateMemorySuggestion: (
     source: ReviewMemorySuggestionSource,
     onProgress?: (progress: CodexReviewProgress) => void,
     signal?: AbortSignal,
   ) => Promise<MemorySuggestionGenerationResult>;
+  onPublishDailyReview: (reviewId: string) => Promise<void> | void;
   onClose: () => void;
   onSave: (id: string, patch: Partial<CodexDailyReview>) => Promise<void>;
 }) {
@@ -2563,6 +2598,14 @@ function ReviewReaderOverlay({
     } finally {
       setSuggestionRunning(false);
     }
+  };
+
+  const publishToLibrary = () => {
+    if (dirty) {
+      setMessage("请先替换当前回顾，保存编辑内容后再存入资料库。");
+      return;
+    }
+    void onPublishDailyReview(review.id);
   };
 
   const regenerate = async () => {
@@ -2710,7 +2753,7 @@ function ReviewReaderOverlay({
               <p className="mt-1">{getMemorySuggestionStatusNote(review.memorySuggestionStatus)}</p>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {dirty && (
               <button
                 className="soft-button action-standard text-xs"
@@ -2729,6 +2772,14 @@ function ReviewReaderOverlay({
                 停止
               </button>
             )}
+            <button
+              className="soft-button action-standard text-xs font-medium disabled:opacity-60"
+              disabled={saving || regenerating || suggestionRunning}
+              onClick={publishToLibrary}
+            >
+              <BookOpenText size={14} />
+              {publishedItemId ? "查看资料" : "保存到资料库"}
+            </button>
             {canGenerateSuggestion && (
               <button
                 className="soft-button action-standard text-xs font-medium disabled:opacity-60"

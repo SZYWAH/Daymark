@@ -72,6 +72,7 @@ type TodayPageProps = {
   autoWorkReviewRunning: boolean;
   autoWorkReviewProgress: CodexReviewProgress | null;
   codexReviews: CodexDailyReview[];
+  publishedReviewItemIds: Record<string, string>;
   memoryPatchDrafts: MemoryPatchDraft[];
   conversationGenerationDrafts: ConversationGenerationDraft[];
   onCreateJournalEntry: (input: { content: string; tags: string[]; todos: string[]; entryDate?: string }) => Promise<void>;
@@ -83,6 +84,7 @@ type TodayPageProps = {
   onOpenSettings: () => void;
   onRunAutoWorkReview: () => Promise<unknown>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
+  onPublishDailyReview: (reviewId: string) => Promise<void> | void;
   onReplaceCodexSessionIndex: (records: CodexSessionIndex[]) => Promise<void>;
   onGenerateCodexReview: (
     input: CodexReviewInput,
@@ -135,6 +137,7 @@ export function TodayPage({
   autoWorkReviewRunning,
   autoWorkReviewProgress,
   codexReviews,
+  publishedReviewItemIds,
   memoryPatchDrafts,
   conversationGenerationDrafts,
   onCreateJournalEntry,
@@ -146,6 +149,7 @@ export function TodayPage({
   onOpenSettings,
   onRunAutoWorkReview,
   onArchiveRollingWorkReview,
+  onPublishDailyReview,
   onReplaceCodexSessionIndex,
   onGenerateCodexReview,
   onGenerateCombinedReview,
@@ -279,6 +283,7 @@ export function TodayPage({
                       todayKey={todayKey}
                       settings={settings}
                       codexReviews={codexReviews}
+                      publishedReviewItemIds={publishedReviewItemIds}
                       memoryPatchDrafts={memoryPatchDrafts}
                       conversationGenerationDrafts={conversationGenerationDrafts}
                       autoWorkReviewSettings={autoWorkReviewSettings}
@@ -289,6 +294,7 @@ export function TodayPage({
                       onOpenSettings={onOpenSettings}
                       onRunAutoWorkReview={onRunAutoWorkReview}
                       onArchiveRollingWorkReview={onArchiveRollingWorkReview}
+                      onPublishDailyReview={onPublishDailyReview}
                       onReplaceCodexSessionIndex={onReplaceCodexSessionIndex}
                       onGenerateCodexReview={onGenerateCodexReview}
                       onGenerateCombinedReview={onGenerateCombinedReview}
@@ -578,6 +584,7 @@ function TodayReviewPanel({
   todayKey,
   settings,
   codexReviews,
+  publishedReviewItemIds,
   memoryPatchDrafts,
   conversationGenerationDrafts,
   autoWorkReviewSettings,
@@ -588,6 +595,7 @@ function TodayReviewPanel({
   onOpenSettings,
   onRunAutoWorkReview,
   onArchiveRollingWorkReview,
+  onPublishDailyReview,
   onReplaceCodexSessionIndex,
   onGenerateCodexReview,
   onGenerateCombinedReview,
@@ -595,6 +603,7 @@ function TodayReviewPanel({
   todayKey: string;
   settings: AiSettings | null;
   codexReviews: CodexDailyReview[];
+  publishedReviewItemIds: Record<string, string>;
   memoryPatchDrafts: MemoryPatchDraft[];
   conversationGenerationDrafts: ConversationGenerationDraft[];
   autoWorkReviewSettings: AutoWorkReviewSettings | null;
@@ -605,6 +614,7 @@ function TodayReviewPanel({
   onOpenSettings: () => void;
   onRunAutoWorkReview: () => Promise<unknown>;
   onArchiveRollingWorkReview: (date: string) => Promise<unknown>;
+  onPublishDailyReview: (reviewId: string) => Promise<void> | void;
   onReplaceCodexSessionIndex: (records: CodexSessionIndex[]) => Promise<void>;
   onGenerateCodexReview: TodayPageProps["onGenerateCodexReview"];
   onGenerateCombinedReview: TodayPageProps["onGenerateCombinedReview"];
@@ -935,9 +945,13 @@ function TodayReviewPanel({
         review={rollingWorkReview}
         running={autoWorkReviewRunning}
         progress={autoWorkReviewProgress}
+        publishedItemId={rollingWorkReview.archiveReviewId
+          ? publishedReviewItemIds[rollingWorkReview.archiveReviewId]
+          : undefined}
         onClose={() => setWorkReviewOpen(false)}
         onRun={onRunAutoWorkReview}
         onArchive={onArchiveRollingWorkReview}
+        onPublishDailyReview={onPublishDailyReview}
       />
     )}
     </>

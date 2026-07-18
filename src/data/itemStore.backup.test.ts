@@ -132,6 +132,12 @@ describe("core backup", () => {
     expect(() =>
       validateCoreBackup(makeBackup({ items: [{ title: "Missing id" }] as never })),
     ).toThrow(/items\[0\]\.id/);
+    expect(() => validateCoreBackup(makeBackup({
+      items: [{
+        ...makeItem("item-invalid-origin", "Invalid origin"),
+        origin: { kind: "unknown" },
+      }] as never,
+    }))).toThrow(/origin\.kind/);
   });
 
   it("restores by replacing existing core data instead of merging", async () => {

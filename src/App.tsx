@@ -38,6 +38,7 @@ import {
   type ReviewGenerationRuntime,
 } from "./components/ReviewGenerationWorkspace";
 import { ConversationScanWorkspace } from "./components/ConversationScanWorkspace";
+import { ReviewPublishDialog } from "./components/ReviewPublishDialog";
 import {
   createKnowledgeLink,
   createFolder,
@@ -59,6 +60,7 @@ import {
   getCodexDailyReviews,
   getCodexSessionIndex,
   getConversationGenerationDrafts,
+  getDailyConversationReviewById,
   getDailyConversationReviewByKey,
   getDailyReviewReplacementDrafts,
   getFolders,
@@ -73,6 +75,7 @@ import {
   getSummaryReports,
   getTodayDashboardData,
   markItemOpened,
+  publishDailyReviewToLibrary,
   replaceConversationSessionIndex,
   restoreCoreBackup,
   saveAutoWorkReviewSettings,
@@ -126,6 +129,10 @@ import {
   updateMemorySuggestionCheckpoint,
 } from "./lib/memorySuggestion";
 import { formatReviewGenerationResult } from "./lib/reviewGenerationResult";
+import {
+  createReviewLibraryDraft,
+  type ReviewLibraryDraft,
+} from "./lib/reviewLibraryPublication";
 import { toConversationReadProgressView } from "./lib/conversationReadProgress";
 import {
   createInitialReviewCheckpoint,
@@ -671,6 +678,9 @@ export default function App() {
   const [extractDraft, setExtractDraft] = useState<ExtractDraft | null>(null);
   const [extractMessage, setExtractMessage] = useState("");
   const [extractSourceId, setExtractSourceId] = useState("");
+  const [reviewPublishSource, setReviewPublishSource] = useState<DailyConversationReview | null>(null);
+  const [reviewPublishDraft, setReviewPublishDraft] = useState<ReviewLibraryDraft | null>(null);
+  const [reviewPublishInitialDraft, setReviewPublishInitialDraft] = useState<ReviewLibraryDraft | null>(null);
   const [error, setError] = useState("");
   const [quickCaptureNotice, setQuickCaptureNotice] = useState("");
   const [searchRefreshKey, setSearchRefreshKey] = useState(0);
@@ -976,6 +986,19 @@ export default function App() {
       : activeView.kind === "smart" || activeView.kind === "folder"
         ? items.find((item) => item.id === selectedId)
         : undefined;
+  const publishedReviewItemIds = useMemo(() => {
+    const itemIdByReviewKey = new Map(
+      items
+        .filter((item) => item.origin?.kind === "daily-review")
+        .map((item) => [item.origin!.sourceKey, item.id] as const),
+    );
+    return Object.fromEntries(
+      codexReviews.flatMap((review) => {
+        const itemId = itemIdByReviewKey.get(review.reviewKey);
+        return itemId ? [[review.id, itemId]] : [];
+      }),
+    ) as Record<string, string>;
+  }, [codexReviews, items]);
   const editorDirty = useMemo(() => {
     if (!isEditing || !draft || !selectedItem) return false;
     const draftValue = sanitizeItemDraft(draft, tagText);
@@ -3180,6 +3203,48 @@ export default function App() {
     await refreshMemoryData();
   };
 
+  const closeReviewPublishDialog = () => {
+    setReviewPublishSource(null);
+    setReviewPublishDraft(null);
+    setReviewPublishInitialDraft(null);
+  };
+
+  const handlePublishDailyReview = async (reviewId: string) => {
+    try {
+      const latestReview = await getDailyConversationReviewById(reviewId);
+      if (!latestReview) {
+        setError("找不到这份正式回顾，请刷新回顾档案后重试。");
+        return;
+      }
+
+      const existingItem = items.find(
+        (item) => item.origin?.kind === "daily-review" && item.origin.sourceKey === latestReview.reviewKey,
+      );
+      if (existingItem) {
+        await handleSelectItem(existingItem);
+        return;
+      }
+
+      const initialDraft = createReviewLibraryDraft(
+        latestReview,
+        createReviewContentVersion(latestReview.title, latestReview.content),
+      );
+      setReviewPublishSource(latestReview);
+      setReviewPublishDraft(initialDraft);
+      setReviewPublishInitialDraft(initialDraft);
+    } catch (publishError) {
+      setError(getSafeErrorMessage(publishError, "打开回顾资料草稿失败。"));
+    }
+  };
+
+  const handleSaveReviewPublishDraft = async () => {
+    if (!reviewPublishDraft || !reviewPublishSource) return;
+    const result = await publishDailyReviewToLibrary(reviewPublishDraft);
+    await refreshLibraryData(result.item.id);
+    closeReviewPublishDialog();
+    await handleSelectItem(result.item);
+  };
+
   const handleUpdateDailyReviewDraft = async (id: string, patch: Partial<DailyReviewReplacementDraft>) => {
     const updated = await updateDailyReviewReplacementDraft(id, patch);
     await refreshMemoryData();
@@ -3564,6 +3629,7 @@ export default function App() {
               autoWorkReviewRunning={autoWorkReviewRunning}
               autoWorkReviewProgress={autoWorkReviewProgress}
               codexReviews={codexReviews}
+              publishedReviewItemIds={publishedReviewItemIds}
               memoryPatchDrafts={memoryPatchDrafts}
               conversationGenerationDrafts={conversationGenerationDrafts}
               onCreateJournalEntry={handleCreateJournalEntry}
@@ -3575,6 +3641,7 @@ export default function App() {
               onOpenSettings={() => handleSelectView({ kind: "settings" })}
               onRunAutoWorkReview={handleRunAutoWorkReview}
               onArchiveRollingWorkReview={handleArchiveRollingWorkReview}
+              onPublishDailyReview={handlePublishDailyReview}
               onReplaceCodexSessionIndex={handleReplaceCodexSessionIndex}
               onGenerateCodexReview={handleGenerateCodexReview}
               onGenerateCombinedReview={handleGenerateCombinedReview}
@@ -3614,6 +3681,7 @@ export default function App() {
               memoryPatchDrafts={memoryPatchDrafts}
               reports={summaryReports}
               codexReviews={codexReviews}
+              publishedReviewItemIds={publishedReviewItemIds}
               rollingWorkReviews={rollingWorkReviews}
               codexSessionIndex={codexSessionIndex}
               dailyReviewDrafts={dailyReviewDrafts}
@@ -3649,6 +3717,7 @@ export default function App() {
               onApplyDailyReviewDraft={handleApplyDailyReviewDraft}
               onIgnoreDailyReviewDraft={handleIgnoreDailyReviewDraft}
               onArchiveRollingWorkReview={handleArchiveRollingWorkReview}
+              onPublishDailyReview={handlePublishDailyReview}
               onSaveMemoryDocument={handleSaveMemoryDocument}
               onApplyMemoryPatch={handleApplyMemoryPatch}
               onIgnoreMemoryPatch={handleIgnoreMemoryPatch}
@@ -3908,6 +3977,16 @@ export default function App() {
         onClose={() => setExtractOpen(false)}
         onCancelGeneration={handleCancelExtractGeneration}
         onSave={handleSaveExtractDraft}
+      />
+      <ReviewPublishDialog
+        open={Boolean(reviewPublishSource)}
+        review={reviewPublishSource}
+        draft={reviewPublishDraft}
+        initialDraft={reviewPublishInitialDraft}
+        folders={folders}
+        onDraftChange={setReviewPublishDraft}
+        onClose={closeReviewPublishDialog}
+        onSave={handleSaveReviewPublishDraft}
       />
       <EditorOverlay
         open={isEditing}

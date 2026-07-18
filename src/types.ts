@@ -16,6 +16,15 @@ export type MemoryPatchStatus = (typeof MEMORY_PATCH_STATUSES)[number];
 export type ThemeMode = (typeof THEME_MODES)[number];
 export type ThemePalette = (typeof THEME_PALETTES)[number];
 
+export type ItemOrigin = {
+  kind: "daily-review";
+  sourceId: string;
+  sourceKey: string;
+  sourceDate: string;
+  sourceLabel: string;
+  contentVersion: string;
+};
+
 export type Item = {
   id: string;
   title: string;
@@ -35,6 +44,7 @@ export type Item = {
   createdAt: string;
   updatedAt: string;
   favorite: boolean;
+  origin?: ItemOrigin;
 };
 
 export type JournalEntry = {

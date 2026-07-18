@@ -1,4 +1,4 @@
-import { Bot, Loader2, Save, Sparkles, X } from "lucide-react";
+import { BookOpenText, Bot, Loader2, Save, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { CodexReviewProgress } from "../ai/deepseek";
@@ -83,16 +83,20 @@ export function RollingWorkReviewReaderOverlay({
   review,
   running,
   progress,
+  publishedItemId,
   onClose,
   onRun,
   onArchive,
+  onPublishDailyReview,
 }: {
   review: RollingWorkReview;
   running: boolean;
   progress: CodexReviewProgress | null;
+  publishedItemId?: string;
   onClose: () => void;
   onRun: () => Promise<unknown>;
   onArchive: (date: string) => Promise<unknown>;
+  onPublishDailyReview: (reviewId: string) => Promise<void> | void;
 }) {
   const [archiving, setArchiving] = useState(false);
   const [message, setMessage] = useState("");
@@ -121,8 +125,13 @@ export function RollingWorkReviewReaderOverlay({
   };
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 px-6 py-8 backdrop-blur-sm">
-      <section className="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-[8px] border border-line bg-paper shadow-panel">
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 px-6 py-8 backdrop-blur-sm" role="presentation">
+      <section
+        aria-label="自动工作回顾"
+        aria-modal="true"
+        className="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-[8px] border border-line bg-paper shadow-panel"
+        role="dialog"
+      >
         <header className="flex shrink-0 items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div className="min-w-0">
             <div className="text-xs font-semibold uppercase tracking-[0.16em] text-copper">Auto Review</div>
@@ -149,6 +158,15 @@ export function RollingWorkReviewReaderOverlay({
             {message || progress?.message || (archived ? "已保存到回顾档案。" : "自动草稿已在本机保存，可按需归档。")}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {review.archiveReviewId && (
+              <button
+                className="soft-button action-compact"
+                onClick={() => void onPublishDailyReview(review.archiveReviewId!)}
+              >
+                <BookOpenText size={13} />
+                {publishedItemId ? "查看资料" : "保存到资料库"}
+              </button>
+            )}
             <button
               className="soft-button action-compact disabled:cursor-not-allowed disabled:opacity-50"
               disabled={running}
