@@ -27,8 +27,17 @@ pnpm qa:tauri:dev -RunId archive-qa-YYYYMMDD
 pnpm qa:tauri:dev -RunId archive-qa-YYYYMMDD -ValidateOnly
 # One-time, user-operated real-service smoke only:
 pnpm qa:tauri:dev -RunId archive-qa-YYYYMMDD -AllowDeepSeekSmoke
-pnpm qa:tauri:build
+pnpm qa:tauri:build -- -Qualifier qa.2 -RunId archive-qa-final
+# Rebuild an earlier commit from an isolated worktree without switching this checkout:
+pnpm qa:tauri:build -- -Qualifier qa.1 -RunId archive-qa-security -SourceRoot D:\path\to\daymark-qa1 -BaseCommit 522f829 -ProbeOverlayCommit <final-qa-commit>
+# After qa.1 and qa.2 exist, run the no-Computer-Use install/upgrade lifecycle with PowerShell 7:
+pnpm qa:installed:unit
+pnpm qa:installed:lifecycle -- -Qa1Installer <qa.1-setup.exe> -Qa2Installer <qa.2-setup.exe> -RunId archive-qa-installed
 ```
+
+The QA build wrapper writes a temporary version override, copies the installer, and records a SHA-256 manifest under `work/qa/<run-id>/`; it never changes the product version in `package.json` or `src-tauri/tauri.conf.json`.
+
+The installed lifecycle is command-line only. Its QA automation probe is rejected unless the runtime identifier is `com.szywah.daymark.qa`, `DAYMARK_QA_AUTOMATION=1`, the scenario is allowlisted, and the evidence path is inside the run directory. It uses a per-run WebView profile, writes synthetic state through application data APIs, exercises only the exact loopback Mock origin, exits through a QA-only command, and attempts silent uninstall plus bounded profile cleanup even after a failed assertion. It does not claim visual, tray, native file-picker, focus, DPI, or real-service coverage.
 
 Playwright uses the installed Microsoft Edge channel and does not download a browser to the system drive. Raw artifacts stay under ignored `work/qa/`; the repository report contains only sanitized conclusions.
 

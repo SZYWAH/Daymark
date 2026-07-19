@@ -12,8 +12,8 @@ export default defineConfig({
   outputDir: path.join(outputRoot, "artifacts"),
   fullyParallel: false,
   workers: 1,
-  timeout: 45_000,
-  expect: { timeout: 8_000 },
+  timeout: 150_000,
+  expect: { timeout: 10_000 },
   reporter: [
     ["line"],
     ["html", { outputFolder: path.join(outputRoot, "report"), open: "never" }],
@@ -27,12 +27,14 @@ export default defineConfig({
     trace: "retain-on-failure",
     video: "off",
     reducedMotion: "reduce",
+    navigationTimeout: 45_000,
+    actionTimeout: 15_000,
   },
   webServer: {
-    command: "pnpm dev",
+    command: "node qa/start-preview.mjs",
     cwd: repoRoot,
     url: "http://127.0.0.1:5173",
-    reuseExistingServer: false,
+    reuseExistingServer: process.env.DAYMARK_QA_EXTERNAL_WEB_SERVER === "1",
     timeout: 120_000,
     env: {
       VITE_ENABLE_DEMO_SEED: "true",

@@ -5,6 +5,7 @@ mod conversation_sessions;
 mod file_commands;
 mod main_window_state;
 mod quick_capture;
+mod qa_automation;
 mod text_utils;
 
 use quick_capture::{
@@ -219,6 +220,7 @@ mod tests {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    qa_automation::initialize();
     tauri::Builder::default()
         .plugin(main_window_state::plugin())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -250,6 +252,8 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            let qa_automation_active =
+                qa_automation::is_active_for_identifier(&app.config().identifier);
             if let Some(summary) = ai_security::qa_security_summary(&app.config().identifier) {
                 eprintln!("{summary}");
             }
@@ -260,11 +264,15 @@ pub fn run() {
                 }
                 eprintln!("failed to prepare main window: {error}");
             }
-            main_window_state::schedule_main_window_show_fallback(app.handle().clone());
-            setup_tray(app)?;
+            if !qa_automation_active {
+                main_window_state::schedule_main_window_show_fallback(app.handle().clone());
+                setup_tray(app)?;
+            }
             let quick_shortcut =
                 Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
-            if let Err(error) = app.global_shortcut().register(quick_shortcut) {
+            if qa_automation_active {
+                set_quick_capture_shortcut_error(None);
+            } else if let Err(error) = app.global_shortcut().register(quick_shortcut) {
                 let app_handle = app.handle().clone();
                 set_quick_capture_shortcut_error(Some(error.to_string()));
                 let message = format!("快速记录快捷键被占用，托盘入口仍可使用。{}", error);
@@ -276,14 +284,16 @@ pub fn run() {
                 set_quick_capture_shortcut_error(None);
             }
             remember_primary_quick_capture_monitor(app.handle()).ok();
-            let prewarm_app = app.handle().clone();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(360));
-                let _ = run_quick_capture_on_main(&prewarm_app, move |app_handle| {
-                    let _ = prewarm_quick_capture_windows(&app_handle);
+            if !qa_automation_active {
+                let prewarm_app = app.handle().clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(360));
+                    let _ = run_quick_capture_on_main(&prewarm_app, move |app_handle| {
+                        let _ = prewarm_quick_capture_windows(&app_handle);
+                    });
                 });
-            });
-            start_quick_capture_lifecycle_watchdog(app.handle().clone());
+                start_quick_capture_lifecycle_watchdog(app.handle().clone());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -382,6 +392,9 @@ pub fn run() {
             ai_transport::ai_generate_stream,
             ai_transport::list_ai_models,
             ai_transport::cancel_ai_request,
+            qa_automation::qa_automation_config,
+            qa_automation::qa_automation_record,
+            qa_automation::qa_automation_finish,
             file_commands::get_supported_file_analysis_types,
             file_commands::extract_local_file_text,
             file_commands::get_supported_vision_types,

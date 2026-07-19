@@ -14,8 +14,7 @@
         "visible": false,
         "backgroundColor": "#000000",
         "decorations": false,
-        "resizable": true,
-        "dataDirectory": "daymark-qa-webview"
+        "resizable": true
       }
     ]
   }

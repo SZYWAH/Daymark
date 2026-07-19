@@ -25,3 +25,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <RootView />
   </React.StrictMode>,
 );
+
+if (windowLabel === "main" && isDesktopRuntime()) {
+  void import("./qa/automation")
+    .then(({ runQaAutomation }) => runQaAutomation())
+    .catch(() => undefined);
+}

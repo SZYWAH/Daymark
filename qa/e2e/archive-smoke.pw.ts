@@ -16,7 +16,7 @@ const viewports = [
 const palettes = ["daymark", "graphite", "mist", "ink", "clay", "fir"];
 
 test("G-02 first-run guide is modal, keyboard trapped, dismissible and persistent", async ({ page }) => {
-  await page.goto("/");
+  await loadApp(page);
   const dialog = page.getByRole("dialog", { name: /把今天做过的事/ });
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("button", { name: "开始记录" })).toBeFocused();
@@ -24,9 +24,11 @@ test("G-02 first-run guide is modal, keyboard trapped, dismissible and persisten
   expect(await dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true);
   await page.getByRole("button", { name: "关闭使用引导" }).click();
   await expect(dialog).toBeHidden();
-  await page.reload();
-  await expect(dialog).toBeHidden();
-  await ready(page);
+  const reopened = await page.context().newPage();
+  await loadApp(reopened);
+  await expect(reopened.getByRole("dialog", { name: /把今天做过的事/ })).toBeHidden();
+  await ready(reopened);
+  await reopened.close();
 });
 
 test("G-03/S-01 primary navigation exposes one current page and all six routes", async ({ page }) => {
@@ -66,15 +68,8 @@ test("C-01 six palettes render in dark and light modes with truthful root state"
   await bootstrap(page);
   for (const mode of ["dark", "light"] as const) {
     for (const palette of palettes) {
-      await page.evaluate(({ mode, palette }) => {
-        localStorage.setItem("daymark.ui.appearance.v1", JSON.stringify({
-          version: 1,
-          mode,
-          palette,
-          accent: { mode: "theme-default" },
-        }));
-      }, { mode, palette });
-      await page.reload();
+      await storeTheme(page, mode, palette);
+      await reloadApp(page);
       await ready(page);
       await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
       await expect(page.locator("html")).toHaveAttribute("data-theme-mode", mode);
@@ -120,7 +115,7 @@ test("A-07 axe finds no serious or critical violations on primary pages", async 
   const blockingByPage: Array<{ page: string; ids: string[]; nodeCount: number }> = [];
   for (const label of ["今日", "搜索", "日志", "资料库", "记忆", "设置"]) {
     await nav.getByRole("button", { name: label, exact: true }).click();
-    await page.waitForTimeout(150);
+    await page.waitForTimeout(700);
     const result = await new AxeBuilder({ page }).analyze();
     await testInfo.attach(`axe-${label}`, {
       body: JSON.stringify(result.violations, null, 2),
@@ -136,6 +131,38 @@ test("A-07 axe finds no serious or critical violations on primary pages", async 
     }
   }
   expect(blockingByPage).toEqual([]);
+});
+
+test("A-07-THEME axe stays clear on Today, Library and Memory across every palette and mode", async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  await bootstrap(page);
+  const blockingBySurface: Array<{ surface: string; ids: string[]; nodeCount: number }> = [];
+  for (const mode of ["dark", "light"] as const) {
+    for (const palette of palettes) {
+      await storeTheme(page, mode, palette);
+      await reloadApp(page);
+      await ready(page);
+      const nav = visibleMainNavigation(page);
+      for (const label of ["今日", "资料库", "记忆"]) {
+        await nav.getByRole("button", { name: label, exact: true }).click();
+        await page.waitForTimeout(700);
+        const result = await new AxeBuilder({ page }).analyze();
+        const blocking = result.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical");
+        if (blocking.length) {
+          blockingBySurface.push({
+            surface: `${palette}-${mode}-${label}`,
+            ids: blocking.map((item) => item.id),
+            nodeCount: blocking.reduce((sum, item) => sum + item.nodes.length, 0),
+          });
+        }
+      }
+    }
+  }
+  await testInfo.attach("axe-theme-matrix", {
+    body: JSON.stringify(blockingBySurface, null, 2),
+    contentType: "application/json",
+  });
+  expect(blockingBySurface).toEqual([]);
 });
 
 test("A-08 reduced motion disables continuous animation", async ({ page }) => {
@@ -154,12 +181,56 @@ async function bootstrap(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem("daymark.onboarding.v1.completed", "true");
   });
-  await page.goto("/");
+  await loadApp(page);
   await ready(page);
+}
+
+async function loadApp(page: Page) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await page.goto("/", { waitUntil: "domcontentloaded", timeout: 45_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/ERR_ABORTED|frame detached|Navigation|Timeout/i.test(message) || attempt === 1) throw error;
+      await page.waitForTimeout(250 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 async function ready(page: Page) {
   await expect(page.getByRole("button", { name: "今日", exact: true }).first()).toBeVisible({ timeout: 15_000 });
+}
+
+async function storeTheme(page: Page, mode: "dark" | "light", palette: string) {
+  await page.evaluate(({ mode, palette }) => {
+    const preference = {
+      version: 1 as const,
+      mode,
+      palette,
+      accent: { mode: "theme-default" as const },
+    };
+    localStorage.setItem("daymark.ui.appearance.v1", JSON.stringify(preference));
+  }, { mode, palette });
+}
+
+async function reloadApp(page: Page) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 45_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/ERR_ABORTED|frame detached|Navigation|Timeout/i.test(message) || attempt === 1) throw error;
+      await page.waitForTimeout(250 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 function visibleMainNavigation(page: Page) {

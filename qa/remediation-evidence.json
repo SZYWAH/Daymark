@@ -1,0 +1,207 @@
+{
+  "schema": "daymark.archive-remediation-evidence.v1",
+  "runId": "archive-remediation-installed-20260720",
+  "branch": "codex/archive-fixes",
+  "results": {
+    "G-02": {
+      "status": "PASS",
+      "environment": "Microsoft Edge Playwright",
+      "actual": "首次引导焦点受限，可关闭，重新打开页面后保持已完成。",
+      "evidence": "work/qa/remediation-browser-final6/playwright/results.json",
+      "severity": "—",
+      "reproducibility": "最终全套 1/1；独立旧跑通过"
+    },
+    "G-03": {
+      "status": "PASS",
+      "environment": "Microsoft Edge Playwright",
+      "actual": "六个一级入口均只有一个 aria-current 页面。",
+      "evidence": "work/qa/remediation-browser-final6/playwright/results.json",
+      "severity": "—",
+      "reproducibility": "最终全套 1/1；独立复跑 2/2"
+    },
+    "G-06": {
+      "status": "PASS",
+      "environment": "Edge 320x568 / 390x844",
+      "actual": "窄屏底部导航可见，页面无横向溢出或遮挡。",
+      "evidence": "work/qa/remediation-browser-final6/playwright/artifacts",
+      "severity": "—",
+      "reproducibility": "2/2 视口"
+    },
+    "MD-01": {
+      "status": "PASS",
+      "environment": "Vitest + React static render",
+      "actual": "CommonMark、GFM、脚注、任务列表、表格和单换行渲染正确。",
+      "evidence": "src/components/MarkdownContent.test.tsx",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "MD-02": {
+      "status": "PASS",
+      "environment": "Vitest + React static render",
+      "actual": "原始 HTML、script、事件属性和危险链接不进入可执行渲染树。",
+      "evidence": "src/components/MarkdownContent.test.tsx",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "MD-04": {
+      "status": "PASS",
+      "environment": "Vitest",
+      "actual": "javascript/data/file/相对路径和未知协议均被阻断。",
+      "evidence": "src/lib/markdown.test.ts",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "MD-05": {
+      "status": "PASS",
+      "environment": "Vitest + React static render",
+      "actual": "仅 HTTPS 图片生成 img；HTTP/data/file 使用安全占位。",
+      "evidence": "src/lib/markdown.test.ts; src/components/MarkdownContent.test.tsx",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "K-01": {
+      "status": "PASS",
+      "environment": "Vitest",
+      "actual": "稳定引用、别名、未绑定、自引用和失效引用解析正确。",
+      "evidence": "src/lib/itemReferences.test.ts; src/components/MarkdownContent.test.tsx",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "K-02": {
+      "status": "PASS",
+      "environment": "Vitest",
+      "actual": "代码、HTML、标准链接和图片中的相似语法不会成为资料引用。",
+      "evidence": "src/lib/itemReferences.test.ts",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "K-06": {
+      "status": "PASS",
+      "environment": "Vitest",
+      "actual": "普通引用跟随当前标题，显式别名保持固定。",
+      "evidence": "src/lib/itemReferences.test.ts",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "K-08": {
+      "status": "PASS",
+      "environment": "Vitest",
+      "actual": "同一目标多处引用合并，反向上下文最多两段。",
+      "evidence": "src/lib/itemReferences.test.ts",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "K-10": {
+      "status": "PASS",
+      "environment": "Vitest + fake-indexeddb",
+      "actual": "删除目标只清理关系，来源正文保留并解析为失效引用。",
+      "evidence": "src/data/itemStore.inlineLinks.test.ts; src/components/MarkdownContent.test.tsx",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "K-11": {
+      "status": "PASS",
+      "environment": "Vitest + fake-indexeddb",
+      "actual": "inline 差异同步不覆盖 manual 关系，未变化关系不重写。",
+      "evidence": "src/data/itemStore.inlineLinks.test.ts; work/qa/remediation-native-2/webview-performance.json",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "V-04": {
+      "status": "PASS",
+      "environment": "Vitest + fake-indexeddb",
+      "actual": "首次发布幂等；资料删除后允许重新发布。",
+      "evidence": "src/data/itemStore.reviewPublication.test.ts",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "V-11": {
+      "status": "PASS",
+      "environment": "Vitest + fake-indexeddb",
+      "actual": "reactivation、删除 head 和全部删除后的版本链回退正确。",
+      "evidence": "src/data/itemStore.reviewVersioning.test.ts; src/data/itemStore.inlineLinks.test.ts",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "Q-03": {
+      "status": "PASS",
+      "environment": "Tauri dev / WebView2 / 2000 synthetic sessions",
+      "actual": "大候选扫描阶段计数持续变化，界面未显示估算百分比。",
+      "evidence": "work/qa/remediation-native-2/native-remediation-evidence.json",
+      "severity": "—",
+      "reproducibility": "1/1"
+    },
+    "Q-04": {
+      "status": "PASS",
+      "environment": "Tauri dev / WebView2",
+      "actual": "扫描可收起，切到今日后继续运行，完成后显示全局任务结果。",
+      "evidence": "work/qa/remediation-native-2/native-remediation-evidence.json",
+      "severity": "—",
+      "reproducibility": "1/1"
+    },
+    "S-03": {
+      "status": "PASS",
+      "environment": "Vitest",
+      "actual": "搜索使用目标显示标题，不暴露稳定引用 ID。",
+      "evidence": "src/lib/itemReferences.test.ts; qa/tests/data-integrity.test.ts",
+      "severity": "—",
+      "reproducibility": "自动化稳定"
+    },
+    "C-03": {
+      "status": "PASS",
+      "environment": "Tauri QA / installed qa.1→qa.2 / local mock",
+      "actual": "既有原生交互断言与安装版探针共同证明合成密钥保存、Mock 请求、升级后重启读取、清除及放弃未保存远程配置符合预期。",
+      "evidence": "work/qa/remediation-native-2/native-remediation-evidence.json; work/qa/installed-cli-lifecycle-archive-final/installed-lifecycle-summary.json",
+      "severity": "—",
+      "reproducibility": "1/1"
+    },
+    "N-00": {
+      "status": "PASS",
+      "environment": "Installed Tauri QA / Windows Credential Manager / local mock",
+      "actual": "qa.1 写入的合成 QA 凭据在 qa.2 覆盖升级后可读取，本地 Mock 非流式与流式请求通过，删除后重启仍不存在；未知远程 origin 继续被安全门阻断。",
+      "evidence": "work/qa/installed-cli-lifecycle-archive-final/installed-lifecycle-summary.json; work/qa/remediation-native-2/native-remediation-evidence.json",
+      "severity": "—",
+      "reproducibility": "完整生命周期 1/1"
+    },
+    "N-06": {
+      "status": "PASS",
+      "environment": "Installed Tauri QA / isolated WebView profiles",
+      "actual": "identifier、每次运行的 WebView profile、凭据命名空间和证据目录均为 QA 专用；静默卸载后 profile、安装目录和卸载项已清除，正式数据目录元数据未变化。",
+      "evidence": "work/qa/installed-cli-lifecycle-archive-final/installed-lifecycle-summary.json; work/qa/remediation-native-2/generated-tauri.qa.conf.json",
+      "severity": "—",
+      "reproducibility": "多次启动一致"
+    },
+    "A-01": {
+      "status": "PASS",
+      "environment": "Microsoft Edge Playwright",
+      "actual": "导入弹窗 Tab 循环、Escape 和关闭后返焦通过。",
+      "evidence": "work/qa/remediation-browser-final6/playwright/results.json",
+      "severity": "—",
+      "reproducibility": "最终全套 1/1"
+    },
+    "A-05": {
+      "status": "PASS",
+      "environment": "Microsoft Edge Playwright / 8 viewports",
+      "actual": "320x568 至 1440x900 无 document/body 横向溢出。",
+      "evidence": "work/qa/remediation-browser-final6/playwright/results.json",
+      "severity": "—",
+      "reproducibility": "8/8 视口"
+    },
+    "A-07": {
+      "status": "PASS",
+      "environment": "Microsoft Edge Playwright + manual screenshot review",
+      "actual": "六个一级页及 12 主题重点页 serious/critical axe 为零；抽样视觉无阻断。",
+      "evidence": "work/qa/remediation-browser-final6/playwright/results.json",
+      "severity": "—",
+      "reproducibility": "最终全套 1/1"
+    },
+    "A-08": {
+      "status": "PASS",
+      "environment": "Microsoft Edge Playwright / reduced motion",
+      "actual": "未发现仍持续无限运行的动画。",
+      "evidence": "work/qa/remediation-browser-final6/playwright/results.json",
+      "severity": "—",
+      "reproducibility": "最终全套 1/1"
+    }
+  }
+}

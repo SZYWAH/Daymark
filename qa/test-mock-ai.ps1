@@ -22,6 +22,9 @@ $process = Start-Process -FilePath $node -ArgumentList @("qa/mock-ai.mjs") -Work
 try {
   $ready = $false
   for ($index = 0; $index -lt 30; $index += 1) {
+    if ($process.HasExited) {
+      throw "Mock AI server exited before it became ready."
+    }
     try {
       $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:18888/v1/models" -TimeoutSec 1
       if ($response.StatusCode -eq 200) {
@@ -38,6 +41,9 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Mock AI self-test failed." }
 
   $requestLog = Join-Path $resolvedRunDir "mock-ai-requests.jsonl"
+  if (-not (Test-Path -LiteralPath $requestLog -PathType Leaf)) {
+    throw "Mock AI request metadata log was not created."
+  }
   if (Select-String -LiteralPath $requestLog -Pattern "qa-sensitive-body|qa-synthetic-key" -Quiet) {
     throw "Mock AI metadata log leaked request content or the synthetic credential."
   }

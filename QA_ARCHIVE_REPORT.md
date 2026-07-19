@@ -1,5 +1,46 @@
 # Daymark archive QA report
 
+## Remediation and installed lifecycle run — 2026-07-20
+
+- Branch: `codex/archive-fixes`
+- Security baseline installer: `Daymark QA 0.1.0-qa.1` from `522f829`
+- Probe overlay: the final `test: complete archive remediation QA` commit, recorded by full hash in the qa.1 build manifest
+- Installed lifecycle evidence: `work/qa/installed-cli-lifecycle-archive-final/`
+- Browser evidence: `work/qa/installed-cli-browser-managed/` (8/8, managed preview exited cleanly)
+- Native evidence: `work/qa/remediation-native-2/`
+- Case ledger: `QA_REMEDIATION_RESULTS.md`
+
+### Current decision
+
+**CORE RISKS CLEARED — ELIGIBLE AS A DEVELOPMENT SNAPSHOT ARCHIVE, NOT AS A STABLE RELEASE**
+
+The identified credential-isolation P0, startup data-loss/freeze path, accessibility blockers and inline-link performance risk were remediated. The command-line-only installed lifecycle then passed qa.1 install, synthetic state creation, qa.2 overwrite upgrade, state retention, local Mock AI, credential deletion, three cold starts and silent uninstall without changing production data-directory metadata. No P0/P1 remains in the exercised paths. The 129-case ledger still records **25 PASS / 0 FAIL / 104 UNVERIFIED / 0 BLOCKED**; therefore this is not a claim of full coverage, release readiness or 129-case success.
+
+### Remediation evidence
+
+| Area | Result | Evidence |
+|---|---|---|
+| QA credential and endpoint isolation | PASS | Runtime identifier selects `daymark.qa.ai-api-key.v1`; synthetic write → restart/read → delete passed; unknown remote origin was blocked; safety summary contained no credential value. |
+| Startup resource loading | PASS (automated) | Core stores load independently with 5 s task limits; partial failure, refresh retention, retry and stale-result protection are covered by Vitest. Credential probing is non-critical. |
+| Browser accessibility | PASS (covered surfaces) | Final Edge run passed 8/8 tests. All six primary pages and the 6 palettes × dark/light matrix for Today, Library and Memory had zero serious/critical axe violations. |
+| Modal and semantic repairs | PASS (covered surfaces) | Import focus trap, nested confirmation Escape ordering and focus restoration passed; invalid card/folder/icon semantics and landmark issues were removed. |
+| Inline-link reconciliation | PASS | Single-source updates are incremental; unchanged 1,000-item/5,000-link reconciliation retained every relation with zero inline writes. |
+| Real WebView2 performance | PASS | Save 20× p95 15.4 ms, max 20.5 ms; 200-item atomic import 122.7 ms; unchanged reconcile 74.2 ms; first 5,000-link establishment 888.0 ms. |
+| Large session scan | PASS (covered paths) | 2,000 synthetic sessions showed live discovering counters, 800-result cap, collapse-and-continue, cancellation with old-result retention and global task entry behavior. |
+| Automated release checks | PASS | 33 Vitest files / 167 tests, 55 Rust tests, 5 QA data tests, 3 installed-startup evaluator tests and all 11 mock-service protocol/failure cases passed. |
+| Installed qa.1 → qa.2 lifecycle | PASS | qa.1 seeded a deterministic item, folder, layout, settings and synthetic QA credential; qa.2 preserved them, completed one non-streaming and one streaming request against the exact loopback Mock origin, cleared the credential, restarted cleanly and uninstalled silently. |
+| Cold fresh-profile startup | PASS (installed qa.2) | Three new WebView profiles each reached Today `ready` below the 5 s process-start gate; exact timings are retained in the installed lifecycle summary. The older 22.7 s / 28.3 s development-harness evidence is retained and not reclassified. |
+| Production-boundary cleanup | PASS | QA install directory, uninstall registration and per-run WebView profiles were removed; production Daymark data-directory existence/last-write metadata was unchanged. No production data content was read. |
+| Real DeepSeek service | UNVERIFIED | Deliberately omitted because the no-Computer-Use flow cannot satisfy the requirement that a real key never passes through Agent-controlled parameters, environment or logs. |
+
+The exact baseline commit, probe-overlay commit and SHA-256, source commit, installer sizes and installer SHA-256 values are recorded in `work/qa/installed-cli-qa1-archive-final/qa-installer-build.json` and `work/qa/installed-cli-qa2-archive-final/qa-installer-build.json`. Keeping those generated values in manifests avoids a self-referential tracked commit hash in this report.
+
+The no-Computer-Use run does not prove window visuals, tray behavior, native file/folder pickers, focus behavior in the installed WebView, Windows 125%/150% DPI rendering or any real AI service. Those cases remain `UNVERIFIED` and cannot be inferred from hidden process execution.
+
+The full corrected browser run completed in 2.2 minutes with 8 expected, 0 unexpected and 0 flaky tests. The original failure evidence and conclusions remain below unchanged so the remediation can be audited against the first run.
+
+## Initial audit — preserved evidence
+
 - Date: 2026-07-19
 - Branch: `codex/archive-qa`
 - Product baseline: `e5542b6`

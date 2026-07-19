@@ -154,6 +154,9 @@ pub(crate) fn main_window_frontend_ready(
     app: AppHandle,
 ) -> Result<(), String> {
     ensure_main_window(&window)?;
+    if crate::qa_automation::is_active_for_identifier(&app.config().identifier) {
+        return Ok(());
+    }
     show_prepared_main_window(&app)
 }
 

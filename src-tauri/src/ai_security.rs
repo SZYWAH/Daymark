@@ -83,7 +83,7 @@ pub(crate) fn ensure_ai_origin_allowed(identifier: &str, endpoint: &Url) -> Resu
     )
 }
 
-fn ensure_ai_origin_allowed_with_policy(
+pub(crate) fn ensure_ai_origin_allowed_with_policy(
     identifier: &str,
     endpoint: &Url,
     configured_mock_origin: Option<&str>,
