@@ -5,10 +5,11 @@ This directory contains audit-only infrastructure. It must not use the productio
 ## Isolation rules
 
 - Tauri identity: `com.szywah.daymark.qa` / `Daymark QA`.
-- WebView data directory: `daymark-qa-webview`.
+- Every native run writes a generated Tauri config with `work/qa/<run-id>/webview-data` as its WebView data directory; it also sets `WEBVIEW2_USER_DATA_FOLDER` to the same location.
 - Every native run uses `work/qa/<run-id>/profile` as both `USERPROFILE` and `HOME`.
 - The launcher refuses to start while a production `Daymark.exe` process exists.
-- The native launcher is intentionally hard-blocked until Daymark implements the dedicated `daymark.qa.ai-api-key.v1` Windows credential namespace. `USERPROFILE` and the Tauri identifier do not isolate Credential Manager.
+- Runtime identifier controls the credential namespace: production uses `daymark.ai-api-key.v1`, while `com.szywah.daymark.qa` uses `daymark.qa.ai-api-key.v1`. The launcher executes the Rust security tests before it can start Tauri.
+- In QA, AI traffic is blocked unless its origin exactly matches `DAYMARK_QA_MOCK_ORIGIN` (a loopback origin). `-AllowDeepSeekSmoke` is the only opt-in that additionally permits `https://api.deepseek.com`; it is for the user-operated, one-time fake-text smoke only.
 - AI request logs contain body length and SHA-256 only, never request bodies or credentials.
 - Any evidence of real-data access, secret logging, partial backup restore, or data loss is P0 and stops the run.
 
@@ -20,8 +21,12 @@ $env:DAYMARK_QA_RUN_DIR = "work/qa/archive-qa-YYYYMMDD"
 pnpm qa:mock-ai
 pnpm qa:data
 pnpm qa:web
-# Expected to stop at the credential isolation gate until the QA-only service exists:
+# Start qa:mock-ai in a separate terminal first, then run the native QA window:
 pnpm qa:tauri:dev -RunId archive-qa-YYYYMMDD
+# Verify native isolation without starting a window:
+pnpm qa:tauri:dev -RunId archive-qa-YYYYMMDD -ValidateOnly
+# One-time, user-operated real-service smoke only:
+pnpm qa:tauri:dev -RunId archive-qa-YYYYMMDD -AllowDeepSeekSmoke
 pnpm qa:tauri:build
 ```
 

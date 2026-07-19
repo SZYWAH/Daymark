@@ -1,9 +1,7 @@
 use base64::{engine::general_purpose, Engine as _};
-use tauri::WebviewWindow;
+use tauri::{Manager, WebviewWindow};
 
-use crate::ensure_main_window;
-
-const AI_API_KEY_SERVICE: &str = "daymark.ai-api-key.v1";
+use crate::{ai_security::credential_service_for_identifier, ensure_main_window};
 
 #[tauri::command]
 pub(crate) fn read_ai_api_key(
@@ -12,7 +10,7 @@ pub(crate) fn read_ai_api_key(
     base_url: String,
 ) -> Result<Option<String>, String> {
     ensure_main_window(&window)?;
-    let entry = ai_api_key_entry(&provider, &base_url)?;
+    let entry = ai_api_key_entry(&window, &provider, &base_url)?;
     match entry.get_password() {
         Ok(password) => Ok(Some(password)),
         Err(keyring::v1::Error::NoEntry) => Ok(None),
@@ -33,7 +31,7 @@ pub(crate) fn write_ai_api_key(
         return Err("API Key 为空。".into());
     }
 
-    let entry = ai_api_key_entry(&provider, &base_url)?;
+    let entry = ai_api_key_entry(&window, &provider, &base_url)?;
     entry
         .set_password(trimmed)
         .map_err(|_| "无法写入系统凭据中的 API Key。".to_string())
@@ -46,17 +44,21 @@ pub(crate) fn delete_ai_api_key(
     base_url: String,
 ) -> Result<(), String> {
     ensure_main_window(&window)?;
-    let entry = ai_api_key_entry(&provider, &base_url)?;
+    let entry = ai_api_key_entry(&window, &provider, &base_url)?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::v1::Error::NoEntry) => Ok(()),
         Err(_) => Err("无法删除系统凭据中的 API Key。".into()),
     }
 }
 
-fn ai_api_key_entry(provider: &str, base_url: &str) -> Result<keyring::v1::Entry, String> {
+fn ai_api_key_entry(
+    window: &WebviewWindow,
+    provider: &str,
+    base_url: &str,
+) -> Result<keyring::v1::Entry, String> {
     let account = ai_api_key_account(provider, base_url)?;
-    keyring::v1::Entry::new(AI_API_KEY_SERVICE, &account)
-        .map_err(|_| "无法打开系统凭据存储。".to_string())
+    let service = credential_service_for_identifier(&window.app_handle().config().identifier)?;
+    keyring::v1::Entry::new(service, &account).map_err(|_| "无法打开系统凭据存储。".to_string())
 }
 
 pub(crate) fn ai_api_key_account(provider: &str, base_url: &str) -> Result<String, String> {

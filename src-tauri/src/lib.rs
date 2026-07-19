@@ -1,4 +1,5 @@
 mod ai_secrets;
+mod ai_security;
 mod ai_transport;
 mod conversation_sessions;
 mod file_commands;
@@ -249,6 +250,9 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            if let Some(summary) = ai_security::qa_security_summary(&app.config().identifier) {
+                eprintln!("{summary}");
+            }
             load_quick_capture_preferences(app.handle());
             if let Err(error) = main_window_state::prepare_main_window(app) {
                 if let Some(main) = app.get_webview_window("main") {

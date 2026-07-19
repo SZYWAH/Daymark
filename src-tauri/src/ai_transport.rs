@@ -1,4 +1,6 @@
-use crate::{ensure_main_window, text_utils::redact_sensitive_text};
+use crate::{
+    ai_security::ensure_ai_origin_allowed, ensure_main_window, text_utils::redact_sensitive_text,
+};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -6,7 +8,7 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::{ipc::Channel, WebviewWindow};
+use tauri::{ipc::Channel, Manager, WebviewWindow};
 use tokio_util::sync::CancellationToken;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -348,11 +350,13 @@ fn role_name(role: AiMessageRole) -> &'static str {
 }
 
 async fn send_request(
+    window: &WebviewWindow,
     request: &AiGenerateRequest,
     stream: bool,
     cancelled: &CancellationToken,
 ) -> Result<reqwest::Response, String> {
     let endpoint = validate_request(request)?;
+    ensure_ai_origin_allowed(&window.app_handle().config().identifier, &endpoint)?;
     if cancelled.is_cancelled() {
         return Err("AI 请求已停止。".into());
     }
@@ -619,7 +623,8 @@ pub(crate) async fn ai_generate(
 ) -> Result<String, String> {
     ensure_main_window(&window)?;
     let (cancelled, _guard) = register_request(&request.request_id)?;
-    let response = checked_response(send_request(&request, false, &cancelled).await?).await?;
+    let response =
+        checked_response(send_request(&window, &request, false, &cancelled).await?).await?;
     let value = response
         .json::<Value>()
         .await
@@ -637,7 +642,8 @@ pub(crate) async fn ai_generate_stream(
 ) -> Result<String, String> {
     ensure_main_window(&window)?;
     let (cancelled, _guard) = register_request(&request.request_id)?;
-    let response = checked_response(send_request(&request, true, &cancelled).await?).await?;
+    let response =
+        checked_response(send_request(&window, &request, true, &cancelled).await?).await?;
     let mut stream = response.bytes_stream();
     let mut buffer = Vec::<u8>::new();
     let mut full_text = String::new();
@@ -739,6 +745,7 @@ pub(crate) async fn list_ai_models(
     let mut last_not_found = None;
 
     for endpoint in endpoints {
+        ensure_ai_origin_allowed(&window.app_handle().config().identifier, &endpoint)?;
         let response = http
             .get(endpoint)
             .header(AUTHORIZATION, authorization.clone())
