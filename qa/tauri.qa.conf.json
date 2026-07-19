@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Daymark QA",
+  "identifier": "com.szywah.daymark.qa",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Daymark QA",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1100,
+        "minHeight": 720,
+        "visible": false,
+        "backgroundColor": "#000000",
+        "decorations": false,
+        "resizable": true,
+        "dataDirectory": "daymark-qa-webview"
+      }
+    ]
+  }
+}
