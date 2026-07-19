@@ -76,7 +76,11 @@ const CORE_BACKUP_STORE_NAMES = [
 ] as const;
 
 type ItemPatch = Partial<Omit<Item, "id" | "createdAt" | "updatedAt">>;
-type CreateItemInput = Partial<Omit<Item, "id" | "createdAt" | "updatedAt">>;
+export type CreateItemInput = Partial<Omit<Item, "id" | "createdAt" | "updatedAt">>;
+export type CreateItemsBatchResult = {
+  created: Item[];
+  duplicateItemIds: string[];
+};
 type FolderPatch = Partial<Omit<FolderNode, "id" | "createdAt" | "updatedAt">>;
 type CreateFolderInput = Pick<FolderNode, "title"> & Partial<Pick<FolderNode, "parentId" | "sortOrder" | "kind">>;
 export type LibraryRecordsInput = {
@@ -192,41 +196,147 @@ type ItemStoreForInlineTransaction = {
   getAll(): Promise<Item[]>;
 };
 
-async function rebuildInlineKnowledgeLinksInTransaction(
-  itemStore: ItemStoreForInlineTransaction,
-  linkStore: LinkStoreForTransaction,
-) {
-  const items = (await itemStore.getAll()).map(normalizeItem);
+export type InlineLinkSyncResult = {
+  created: number;
+  updated: number;
+  deleted: number;
+  unchanged: number;
+};
+
+type ExpectedInlineKnowledgeLink = Pick<KnowledgeLink,
+  "sourceKind" | "sourceId" | "targetKind" | "targetId" | "relation" | "linkKind" | "targetRef">;
+
+function getInlineLinkKey(sourceId: string, targetRef: string) {
+  return `${sourceId}\u0000${targetRef}`;
+}
+
+function getExpectedInlineKnowledgeLinks(items: Item[], sourceIds?: ReadonlySet<string>) {
   const visibleItems = getVisibleDailyReviewLibraryItems(items);
-  const visibleIds = new Set(visibleItems.map((item) => item.id));
-  const links = await linkStore.getAll();
-  await Promise.all(links.filter((link) => link.linkKind === "inline").map((link) => linkStore.delete(link.id)));
-  const now = formatTimestamp();
-  const writes: Promise<string>[] = [];
+  const visibleById = new Map(visibleItems.map((item) => [item.id, item]));
+  const reviewHeads = new Map(
+    visibleItems
+      .filter((item) => item.origin?.kind === "daily-review")
+      .map((item) => [item.origin!.sourceKey, item]),
+  );
+  const expected = new Map<string, ExpectedInlineKnowledgeLink>();
 
   visibleItems.forEach((source) => {
-    const targets = new Map<string, Item>();
+    if (sourceIds && !sourceIds.has(source.id)) return;
+    const targetRefs = new Set<string>();
     parseItemReferences(source.content).forEach((token) => {
-      if (token.kind !== "bound" || !token.targetRef || targets.has(token.targetRef)) return;
-      const target = resolveItemTargetRef(items, token.targetRef);
-      if (!target || target.id === source.id || !visibleIds.has(target.id)) return;
-      targets.set(token.targetRef, target);
-    });
-    targets.forEach((target, targetRef) => {
-      writes.push(linkStore.put({
-        id: createId("link"),
+      if (token.kind !== "bound" || !token.targetRef || targetRefs.has(token.targetRef)) return;
+      const target = token.targetRef.startsWith("review:")
+        ? reviewHeads.get(token.targetRef.slice("review:".length))
+        : visibleById.get(token.targetRef);
+      if (!target || target.id === source.id) return;
+      targetRefs.add(token.targetRef);
+      expected.set(getInlineLinkKey(source.id, token.targetRef), {
         sourceKind: "item",
         sourceId: source.id,
         targetKind: "item",
         targetId: target.id,
         relation: "正文引用",
-        createdAt: now,
         linkKind: "inline",
-        targetRef,
-      }));
+        targetRef: token.targetRef,
+      });
     });
   });
-  await Promise.all(writes);
+
+  return expected;
+}
+
+async function synchronizeInlineKnowledgeLinksInTransaction(
+  itemStore: ItemStoreForInlineTransaction,
+  linkStore: LinkStoreForTransaction,
+  sourceIds?: ReadonlySet<string>,
+): Promise<InlineLinkSyncResult> {
+  const items = (await itemStore.getAll()).map(normalizeItem);
+  const expected = getExpectedInlineKnowledgeLinks(items, sourceIds);
+  const sourceId = sourceIds?.size === 1 ? sourceIds.values().next().value : undefined;
+  const links = sourceId
+    ? await linkStore.index("by-source").getAll(["item", sourceId])
+    : await linkStore.getAll();
+  const existingInline = links
+    .filter((link) => link.linkKind === "inline" && (!sourceIds || sourceIds.has(link.sourceId)))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const kept = new Set<string>();
+  const stale: KnowledgeLink[] = [];
+  const writes: Promise<string>[] = [];
+  let created = 0;
+  let updated = 0;
+  let unchanged = 0;
+
+  existingInline.forEach((link) => {
+    const targetRef = link.targetRef?.trim() ?? "";
+    const key = targetRef ? getInlineLinkKey(link.sourceId, targetRef) : "";
+    const desired = expected.get(key);
+    if (!desired || kept.has(key)) {
+      stale.push(link);
+      return;
+    }
+    kept.add(key);
+    if (
+      link.sourceKind === desired.sourceKind
+      && link.targetKind === desired.targetKind
+      && link.targetId === desired.targetId
+      && link.relation === desired.relation
+      && link.targetRef === desired.targetRef
+      && link.linkKind === "inline"
+    ) {
+      unchanged += 1;
+      return;
+    }
+    updated += 1;
+    writes.push(linkStore.put({ ...link, ...desired }));
+  });
+
+  const now = formatTimestamp();
+  expected.forEach((desired, key) => {
+    if (kept.has(key)) return;
+    created += 1;
+    writes.push(linkStore.put({ id: createId("link"), createdAt: now, ...desired }));
+  });
+  await Promise.all([...stale.map((link) => linkStore.delete(link.id)), ...writes]);
+  return { created, updated, deleted: stale.length, unchanged };
+}
+
+/** Synchronizes only one visible source item after a normal create or content edit. */
+async function syncInlineLinksForSourceInTransaction(
+  itemStore: ItemStoreForInlineTransaction,
+  linkStore: LinkStoreForTransaction,
+  sourceId: string,
+) {
+  return synchronizeInlineKnowledgeLinksInTransaction(itemStore, linkStore, new Set([sourceId]));
+}
+
+/** Reconciles all inline links after graph-wide changes such as restore or review-head changes. */
+async function reconcileInlineLinksInTransaction(
+  itemStore: ItemStoreForInlineTransaction,
+  linkStore: LinkStoreForTransaction,
+) {
+  return synchronizeInlineKnowledgeLinksInTransaction(itemStore, linkStore);
+}
+
+export async function syncInlineLinksForSource(sourceId: string): Promise<InlineLinkSyncResult> {
+  const normalizedSourceId = sourceId.trim();
+  if (!normalizedSourceId) return { created: 0, updated: 0, deleted: 0, unchanged: 0 };
+  const db = await getDb();
+  const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
+  const result = await syncInlineLinksForSourceInTransaction(
+    tx.objectStore(ITEM_STORE),
+    tx.objectStore(LINK_STORE),
+    normalizedSourceId,
+  );
+  await tx.done;
+  return result;
+}
+
+export async function reconcileInlineLinks(): Promise<InlineLinkSyncResult> {
+  const db = await getDb();
+  const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
+  const result = await reconcileInlineLinksInTransaction(tx.objectStore(ITEM_STORE), tx.objectStore(LINK_STORE));
+  await tx.done;
+  return result;
 }
 
 function normalizeUniqueSource(value?: string) {
@@ -379,6 +489,34 @@ interface KnowledgeBaseDb extends DBSchema {
       "by-updatedAt": string;
     };
   };
+}
+
+function createLibraryItemFromInput(
+  input: CreateItemInput,
+  now: string,
+  defaults: { title: string; aiSummary: string; processStatus: Item["processStatus"] },
+) {
+  return normalizeItem({
+    id: createId("item"),
+    title: input.title?.trim() || defaults.title,
+    type: input.type ?? "note",
+    status: input.status,
+    processStatus: input.processStatus ?? defaults.processStatus,
+    readingStatus: input.readingStatus ?? getDefaultReadingStatus(input.type),
+    folderId: input.folderId,
+    tags: input.tags ?? [],
+    content: input.content ?? "",
+    filePath: input.filePath,
+    sourceUrl: input.sourceUrl,
+    aiSummary: input.aiSummary ?? defaults.aiSummary,
+    todos: input.todos ?? [],
+    lastAiRunAt: input.lastAiRunAt,
+    lastOpenedAt: input.lastOpenedAt,
+    createdAt: now,
+    updatedAt: now,
+    favorite: input.favorite ?? false,
+    origin: input.origin,
+  });
 }
 
 let dbPromise: Promise<IDBPDatabase<KnowledgeBaseDb>> | undefined;
@@ -791,7 +929,7 @@ export async function restoreCoreBackup(input: unknown): Promise<DaymarkCoreBack
   backup.payload.links.forEach((link) => requests.push(linkStore.put(link)));
 
   await Promise.all(requests);
-  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
+  await reconcileInlineLinksInTransaction(itemStore, linkStore);
   const restoredLinkCount = (await linkStore.getAll()).length;
   await tx.done;
   return { ...backup.counts, links: restoredLinkCount };
@@ -1014,37 +1152,90 @@ export async function getItems() {
 
 export async function createItem(input: CreateItemInput = {}) {
   const db = await getDb();
-  const duplicate = findDuplicateItemBySource(await db.getAll(ITEM_STORE), input);
-  if (duplicate) return duplicate;
+  const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
+  const itemStore = tx.objectStore(ITEM_STORE);
+  const linkStore = tx.objectStore(LINK_STORE);
+  const duplicate = findDuplicateItemBySource(await itemStore.getAll(), input);
+  if (duplicate) {
+    await tx.done;
+    return normalizeItem(duplicate);
+  }
 
   const now = formatTimestamp();
-  const item: Item = {
-    id: createId("item"),
-    title: input.title?.trim() || "未命名条目",
-    type: input.type ?? "note",
-    status: input.status,
-    processStatus: input.processStatus ?? "收件箱",
-    readingStatus: input.readingStatus ?? getDefaultReadingStatus(input.type),
-    folderId: input.folderId,
-    tags: input.tags ?? [],
-    content: input.content ?? "",
-    filePath: input.filePath,
-    sourceUrl: input.sourceUrl,
-    aiSummary: input.aiSummary ?? "等待 AI 摘要。",
-    todos: input.todos ?? [],
-    lastAiRunAt: input.lastAiRunAt,
-    lastOpenedAt: input.lastOpenedAt,
-    createdAt: now,
-    updatedAt: now,
-    favorite: input.favorite ?? false,
-  };
-
-  const normalized = normalizeItem(item);
-  const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
-  await tx.objectStore(ITEM_STORE).put(normalized);
-  await rebuildInlineKnowledgeLinksInTransaction(tx.objectStore(ITEM_STORE), tx.objectStore(LINK_STORE));
+  const normalized = createLibraryItemFromInput(input, now, {
+    title: "未命名条目",
+    aiSummary: "等待 AI 摘要。",
+    processStatus: "收件箱",
+  });
+  await itemStore.put(normalized);
+  if (normalized.origin?.kind === "daily-review") {
+    await reconcileInlineLinksInTransaction(itemStore, linkStore);
+  } else {
+    await syncInlineLinksForSourceInTransaction(itemStore, linkStore, normalized.id);
+  }
   await tx.done;
   return normalized;
+}
+
+/**
+ * Creates a batch of imported library items and reconciles inline links once.
+ * Duplicate source paths/URLs resolve to the already stored (or first batch) item.
+ */
+export async function createItemsBatch(inputs: CreateItemInput[]): Promise<CreateItemsBatchResult> {
+  if (inputs.length === 0) return { created: [], duplicateItemIds: [] };
+  const db = await getDb();
+  const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
+  try {
+    const itemStore = tx.objectStore(ITEM_STORE);
+    const linkStore = tx.objectStore(LINK_STORE);
+    const existing = (await itemStore.getAll()).map(normalizeItem);
+    const filePathIndex = new Map<string, Item>();
+    const sourceUrlIndex = new Map<string, Item>();
+    const indexCandidate = (item: Item) => {
+      const filePath = normalizeUniqueSource(item.filePath);
+      const sourceUrl = normalizeUniqueSource(item.sourceUrl);
+      if (filePath && !filePathIndex.has(filePath)) filePathIndex.set(filePath, item);
+      if (sourceUrl && !sourceUrlIndex.has(sourceUrl)) sourceUrlIndex.set(sourceUrl, item);
+    };
+    existing.forEach(indexCandidate);
+    const created: Item[] = [];
+    const duplicateItemIds: string[] = [];
+
+    for (const input of inputs) {
+      const filePath = normalizeUniqueSource(input.filePath);
+      const sourceUrl = normalizeUniqueSource(input.sourceUrl);
+      const duplicate = (filePath ? filePathIndex.get(filePath) : undefined)
+        ?? (sourceUrl ? sourceUrlIndex.get(sourceUrl) : undefined);
+      if (duplicate) {
+        duplicateItemIds.push(duplicate.id);
+        continue;
+      }
+      const item = createLibraryItemFromInput(input, formatTimestamp(), {
+        title: "未命名条目",
+        aiSummary: "等待 AI 摘要。",
+        processStatus: "收件箱",
+      });
+      await itemStore.put(item);
+      indexCandidate(item);
+      created.push(item);
+    }
+
+    await reconcileInlineLinksInTransaction(itemStore, linkStore);
+    await tx.done;
+    return { created, duplicateItemIds };
+  } catch (error) {
+    try {
+      tx.abort();
+    } catch {
+      // If IndexedDB already aborted the transaction, preserve the original failure.
+    }
+    try {
+      await tx.done;
+    } catch {
+      // The aborted transaction is expected; preserve the original failure.
+    }
+    throw error;
+  }
 }
 
 export async function publishDailyReviewToLibrary(
@@ -1112,7 +1303,7 @@ export async function publishDailyReviewToLibrary(
   });
 
   await itemStore.put(item);
-  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
+  await reconcileInlineLinksInTransaction(itemStore, linkStore);
   await tx.done;
   return { item, created: true };
 }
@@ -1233,7 +1424,7 @@ export async function applyDailyReviewLibraryUpdate(
       },
     });
     await itemStore.put(updated);
-    await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
+    await syncInlineLinksForSourceInTransaction(itemStore, linkStore, updated.id);
     await tx.done;
     return { item: updated, created: false };
   }
@@ -1257,7 +1448,7 @@ export async function applyDailyReviewLibraryUpdate(
     },
   });
   await itemStore.put(created);
-  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
+  await reconcileInlineLinksInTransaction(itemStore, linkStore);
   await tx.done;
   return { item: created, created: true };
 }
@@ -1330,7 +1521,7 @@ export async function restoreDailyReviewLibraryVersion(
     },
   });
   await itemStore.put(restored);
-  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
+  await reconcileInlineLinksInTransaction(itemStore, linkStore);
   await tx.done;
   return { item: restored, created: true };
 }
@@ -1509,25 +1700,10 @@ export async function createItemWithKnowledgeLink(
   const linkStore = tx.objectStore(LINK_STORE);
   const duplicate = findDuplicateItemBySource(await itemStore.getAll(), input);
   const now = formatTimestamp();
-  const item = duplicate ?? normalizeItem({
-    id: createId("item"),
-    title: input.title?.trim() || "Untitled item",
-    type: input.type ?? "note",
-    status: input.status,
-    processStatus: input.processStatus ?? PROCESS_STATUSES[0],
-    readingStatus: input.readingStatus ?? getDefaultReadingStatus(input.type),
-    folderId: input.folderId,
-    tags: input.tags ?? [],
-    content: input.content ?? "",
-    filePath: input.filePath,
-    sourceUrl: input.sourceUrl,
-    aiSummary: input.aiSummary ?? "Waiting for AI summary.",
-    todos: input.todos ?? [],
-    lastAiRunAt: input.lastAiRunAt,
-    lastOpenedAt: input.lastOpenedAt,
-    createdAt: now,
-    updatedAt: now,
-    favorite: input.favorite ?? false,
+  const item = duplicate ?? createLibraryItemFromInput(input, now, {
+    title: "Untitled item",
+    aiSummary: "Waiting for AI summary.",
+    processStatus: PROCESS_STATUSES[0],
   });
 
   if (!duplicate) {
@@ -1557,7 +1733,11 @@ export async function createItemWithKnowledgeLink(
     await linkStore.put(link);
   }
 
-  await rebuildInlineKnowledgeLinksInTransaction(itemStore, linkStore);
+  if (item.origin?.kind === "daily-review") {
+    await reconcileInlineLinksInTransaction(itemStore, linkStore);
+  } else {
+    await syncInlineLinksForSourceInTransaction(itemStore, linkStore, item.id);
+  }
 
   await tx.done;
   return { item, link };
@@ -1581,7 +1761,11 @@ export async function updateItem(id: string, patch: ItemPatch) {
 
   await itemStore.put(updated);
   if (Object.prototype.hasOwnProperty.call(patch, "content") || Object.prototype.hasOwnProperty.call(patch, "origin")) {
-    await rebuildInlineKnowledgeLinksInTransaction(itemStore, tx.objectStore(LINK_STORE));
+    if (Object.prototype.hasOwnProperty.call(patch, "origin")) {
+      await reconcileInlineLinksInTransaction(itemStore, tx.objectStore(LINK_STORE));
+    } else {
+      await syncInlineLinksForSourceInTransaction(itemStore, tx.objectStore(LINK_STORE), updated.id);
+    }
   }
   await tx.done;
   return updated;
@@ -1592,7 +1776,7 @@ export async function deleteItem(id: string) {
   const tx = db.transaction([ITEM_STORE, LINK_STORE], "readwrite");
   await tx.objectStore(ITEM_STORE).delete(id);
   await deleteLinksForEntityInTransaction(tx.objectStore(LINK_STORE), "item", id);
-  await rebuildInlineKnowledgeLinksInTransaction(tx.objectStore(ITEM_STORE), tx.objectStore(LINK_STORE));
+  await reconcileInlineLinksInTransaction(tx.objectStore(ITEM_STORE), tx.objectStore(LINK_STORE));
   await tx.done;
 }
 
@@ -2133,7 +2317,7 @@ export async function putLibraryRecords({ items, folders }: LibraryRecordsInput)
     ...folders.map((folder) => tx.objectStore(FOLDER_STORE).put(folder)),
     ...items.map((item) => tx.objectStore(ITEM_STORE).put(normalizeItem(item))),
   ]);
-  await rebuildInlineKnowledgeLinksInTransaction(tx.objectStore(ITEM_STORE), tx.objectStore(LINK_STORE));
+  await reconcileInlineLinksInTransaction(tx.objectStore(ITEM_STORE), tx.objectStore(LINK_STORE));
   await tx.done;
 }
 

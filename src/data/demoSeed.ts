@@ -1,6 +1,6 @@
 import {
   createFolder,
-  createItem,
+  createItemsBatch,
   deleteFolder,
   deleteItem,
   getFolders,
@@ -116,9 +116,9 @@ async function seedLibraryShowcaseData() {
   const existingDemoTitles = new Set(
     (await getItems()).filter((item) => item.tags.includes("演示资料")).map((item) => item.title),
   );
-  for (const item of showcaseItems) {
-    if (existingDemoTitles.has(item.title)) continue;
-    await createItem({
+  await createItemsBatch(showcaseItems
+    .filter((item) => !existingDemoTitles.has(item.title))
+    .map((item) => ({
       title: item.title,
       type: item.type,
       processStatus: item.processStatus,
@@ -130,8 +130,7 @@ async function seedLibraryShowcaseData() {
       favorite: item.favorite ?? false,
       sourceUrl: item.sourceUrl,
       todos: item.processStatus === "待整理" ? ["补充标签", "确认归档目录"] : [],
-    });
-  }
+    })));
 }
 
 async function normalizeLibraryShowcaseData() {

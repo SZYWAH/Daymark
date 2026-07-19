@@ -43,6 +43,7 @@ import {
   createKnowledgeLink,
   createFolder,
   createItem,
+  createItemsBatch,
   createItemWithKnowledgeLink,
   createJournalEntry,
   createDailyReviewReplacementDraft,
@@ -1685,21 +1686,9 @@ export default function App() {
   const handleCreateImportedItems = async (drafts: ImportDraft[]) => {
     if (drafts.length === 0) return false;
 
-    let lastCreatedId = "";
-    let skippedCount = 0;
-    const knownFilePaths = new Set(items.map((item) => normalizeUniqueSource(item.filePath)).filter(Boolean));
-    let firstExistingItem: Item | undefined;
-
-    for (const draftItem of drafts) {
-      const filePathKey = normalizeUniqueSource(draftItem.filePath);
-      if (filePathKey && knownFilePaths.has(filePathKey)) {
-        firstExistingItem ??= items.find((item) => normalizeUniqueSource(item.filePath) === filePathKey);
-        skippedCount += 1;
-        continue;
-      }
-
+    const result = await createItemsBatch(drafts.map((draftItem) => {
       const processStatus = draftItem.folderId ? PROCESS_TO_ORGANIZE : PROCESS_INBOX;
-      const created = await createItem({
+      return {
         title: draftItem.title.trim() || getPathBaseName(draftItem.filePath) || "未命名资料",
         type: draftItem.type,
         folderId: draftItem.folderId,
@@ -1709,20 +1698,16 @@ export default function App() {
         content: draftItem.content,
         filePath: draftItem.filePath,
         aiSummary: "尚未生成 AI 摘要",
-      });
-      lastCreatedId = created.id;
-      if (filePathKey) knownFilePaths.add(filePathKey);
-    }
+      };
+    }));
+    const lastCreatedId = result.created[result.created.length - 1]?.id ?? "";
+    const skippedCount = result.duplicateItemIds.length;
 
     if (!lastCreatedId && skippedCount > 0) {
       setError(`已跳过 ${skippedCount} 条重复资料，没有创建新记录。`);
+      const firstExistingItem = items.find((item) => item.id === result.duplicateItemIds[0]);
       if (firstExistingItem) await handleSelectItem(firstExistingItem);
       return false;
-    }
-
-    if (!lastCreatedId && skippedCount > 0) {
-      setError(`已跳过 ${skippedCount} 条重复资料。`);
-      return;
     }
 
     const attentionView: ListView = { kind: "smart", id: "attention" };

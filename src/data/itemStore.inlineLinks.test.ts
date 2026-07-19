@@ -5,6 +5,7 @@ import type { DaymarkCoreBackupPayload, DaymarkCoreBackupV1 } from "./itemStore"
 import type { Item } from "../types";
 import {
   DAYMARK_CORE_BACKUP_SCHEMA,
+  createItemsBatch,
   createItem,
   createKnowledgeLink,
   deleteItem,
@@ -12,7 +13,9 @@ import {
   getItems,
   getKnowledgeLinks,
   restoreCoreBackup,
+  reconcileInlineLinks,
   searchKnowledge,
+  syncInlineLinksForSource,
   updateItem,
   validateCoreBackup,
 } from "./itemStore";
@@ -81,6 +84,78 @@ describe("inline item knowledge links", () => {
     };
     expect(validateCoreBackup(makeBackup({ links: [oldManual] })).payload.links[0].linkKind).toBeUndefined();
     expect(() => validateCoreBackup(makeBackup({ links: [{ ...oldManual, linkKind: "inline" }] }))).toThrow(/正文引用|targetRef/);
+  });
+
+  it("updates only the edited source and keeps unrelated inline records stable", async () => {
+    const firstTarget = await createItem({ title: "first target" });
+    const secondTarget = await createItem({ title: "second target" });
+    const firstSource = await createItem({ title: "first source", content: `[[item:${firstTarget.id}]]` });
+    const secondSource = await createItem({ title: "second source", content: `[[item:${secondTarget.id}]]` });
+    const before = (await getKnowledgeLinks()).find((link) => link.sourceId === secondSource.id && link.linkKind === "inline")!;
+
+    await updateItem(firstSource.id, { content: `[[item:${secondTarget.id}]]` });
+
+    const after = (await getKnowledgeLinks()).find((link) => link.sourceId === secondSource.id && link.linkKind === "inline")!;
+    expect(after.id).toBe(before.id);
+    expect(after.createdAt).toBe(before.createdAt);
+    expect(await syncInlineLinksForSource(firstSource.id)).toEqual({ created: 0, updated: 0, deleted: 0, unchanged: 1 });
+  });
+
+  it("creates a 200-item batch atomically, deduplicates existing and in-batch sources, and reconciles once", async () => {
+    const existing = await createItem({ title: "existing", sourceUrl: "https://example.com/existing" });
+    const inputs = Array.from({ length: 200 }, (_, index) => ({
+      title: `batch ${index}`,
+      sourceUrl: `https://example.com/${index}`,
+      content: index === 0 ? "[[item:missing]]" : "",
+    }));
+    inputs.push({ title: "existing duplicate", sourceUrl: "https://example.com/existing", content: "" });
+    inputs.push({ title: "batch duplicate", sourceUrl: "https://example.com/20", content: "" });
+
+    const result = await createItemsBatch(inputs);
+    expect(result.created).toHaveLength(200);
+    expect(result.duplicateItemIds).toEqual([existing.id, result.created[20].id]);
+    expect(await getItems()).toHaveLength(201);
+  });
+
+  it("aborts an entire batch when a later input fails", async () => {
+    const broken = {} as { title: string };
+    Object.defineProperty(broken, "title", { get: () => { throw new Error("batch input failure"); } });
+
+    await expect(createItemsBatch([
+      { title: "before failure", sourceUrl: "https://example.com/before" },
+      broken,
+    ])).rejects.toThrow("batch input failure");
+    expect(await getItems()).toHaveLength(0);
+  });
+
+  it("serializes single and batch source deduplication in write transactions", async () => {
+    const sourceUrl = "https://example.com/concurrent";
+    const [single, batch] = await Promise.all([
+      createItem({ title: "single", sourceUrl }),
+      createItemsBatch([{ title: "batch", sourceUrl }]),
+    ]);
+
+    const stored = await getItems();
+    expect(stored).toHaveLength(1);
+    expect(single.id).toBe(stored[0].id);
+    expect(batch.created.length + batch.duplicateItemIds.length).toBe(1);
+    expect(batch.created[0]?.id ?? batch.duplicateItemIds[0]).toBe(stored[0].id);
+  });
+
+  it("reconciles a 1,000-item / 5,000-reference graph without rewriting unchanged inline records", async () => {
+    const items = Array.from({ length: 1000 }, (_, index) => makeItem(
+      `graph-${index}`,
+      `graph ${index}`,
+      Array.from({ length: 5 }, (_, offset) => `[[item:graph-${(index + offset + 1) % 1000}]]`).join(" "),
+    ));
+    await restoreCoreBackup(makeBackup({ items }));
+    const firstLinks = (await getKnowledgeLinks()).filter((link) => link.linkKind === "inline");
+    expect(firstLinks).toHaveLength(5000);
+    const result = await reconcileInlineLinks();
+    const secondLinks = (await getKnowledgeLinks()).filter((link) => link.linkKind === "inline");
+
+    expect(result).toEqual({ created: 0, updated: 0, deleted: 0, unchanged: 5000 });
+    expect(secondLinks.map((link) => link.id).sort()).toEqual(firstLinks.map((link) => link.id).sort());
   });
 });
 
