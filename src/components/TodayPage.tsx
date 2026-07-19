@@ -20,6 +20,7 @@ import { animate } from "animejs";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getEffectiveAiSettings, type CodexReviewProgress } from "../ai/deepseek";
 import { PageWorkspace } from "./PageWorkspace";
+import type { AsyncResource } from "../lib/todayDashboard";
 import { ReviewProgressIndicator } from "./ReviewProgressIndicator";
 import { AutoWorkReviewStatusRow, RollingWorkReviewReaderOverlay } from "./TodayAutoWorkReview";
 import {
@@ -65,6 +66,8 @@ type GenerateReviewResult = {
 type TodayPageProps = {
   data: TodayDashboardData | null;
   loading: boolean;
+  dashboardResource?: AsyncResource<TodayDashboardData>;
+  onRetryDashboard?: () => void;
   focusComposerRequest: number;
   settings: AiSettings | null;
   autoWorkReviewSettings: AutoWorkReviewSettings | null;
@@ -133,6 +136,8 @@ const sourceLabels: Record<ConversationSourceKind, string> = {
 export function TodayPage({
   data,
   loading,
+  dashboardResource,
+  onRetryDashboard,
   focusComposerRequest,
   settings,
   autoWorkReviewSettings,
@@ -234,13 +239,15 @@ export function TodayPage({
     todayPatchCountForShortcut === 0 &&
     data.pendingItemCount === 0 &&
     data.journalTodoCount === 0;
+  const dashboardFailed = dashboardResource?.status === "failed";
+  const dashboardFailedWithoutData = dashboardFailed && !dashboardResource.data;
 
   return (
     <PageWorkspace
       eyebrow="Today"
       title="此刻记录"
       description="先写下这一刻，其他内容需要时再轻轻展开。"
-      meta={data ? `${data.todayJournalEntryCount} 段文字` : "正在整理"}
+      meta={dashboardFailedWithoutData ? "暂时未加载" : data ? `${data.todayJournalEntryCount} 段文字${dashboardFailed ? " · 刷新失败" : ""}` : "正在整理"}
       homeHeader
       actions={
         <button className="ghost-action action-standard" aria-label="打开搜索页" onClick={onOpenSearch}>
@@ -268,7 +275,28 @@ export function TodayPage({
             </p>
           )}
 
-          {loading || !data ? (
+          {dashboardFailed && dashboardResource.data && (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-line bg-panel px-4 py-3" role="status">
+              <p className="text-xs leading-5 text-ink/65">刷新失败，已保留上一次完整的今日内容。</p>
+              {onRetryDashboard && (
+                <button className="secondary-action action-compact" onClick={onRetryDashboard}>
+                  重新加载
+                </button>
+              )}
+            </div>
+          )}
+
+          {dashboardFailedWithoutData ? (
+            <div className="mt-4 rounded-[10px] border border-line bg-panel px-5 py-4 text-center">
+              <p className="text-sm font-semibold text-ink">今日内容暂时未加载</p>
+              <p className="mt-1 text-xs leading-5 text-ink/58">{dashboardResource.message}</p>
+              {onRetryDashboard && (
+                <button className="secondary-action action-standard mt-3" onClick={onRetryDashboard}>
+                  重新加载
+                </button>
+              )}
+            </div>
+          ) : loading || !data ? (
             <div className="mt-4">
               <EmptyToday text="正在整理今日内容。" />
             </div>
@@ -433,8 +461,8 @@ function TodayInlineShortcuts({
           >
             <Icon size={15} />
             <span>{label}</span>
-            <span className="rounded-full border border-line px-1.5 py-0.5 text-[11px] text-ink/60">{count}</span>
-            {hint && <span className="hidden text-[11px] text-ink/38 sm:inline">{hint}</span>}
+            <span className="rounded-full border border-line px-1.5 py-0.5 text-[11px] text-ink/75">{count}</span>
+            {hint && <span className="hidden text-[11px] text-ink/70 sm:inline">{hint}</span>}
           </button>
         );
       })}
@@ -503,7 +531,7 @@ function TodayComposer({
         className="home-composer-input"
       />
       <div className="home-composer-actions">
-        <div className="ui-text-faint text-xs">此刻记录</div>
+        <div className="text-xs text-ink/65">此刻记录</div>
         <div className="flex shrink-0 items-center gap-2">
           <button
             className="ghost-action icon-action-prominent"
@@ -1132,7 +1160,7 @@ function CompactEmptyState({ text }: { text: string }) {
 
 function EmptyToday({ text }: { text: string }) {
   return (
-    <div className="flex min-h-[180px] items-center justify-center border-t border-line/60 bg-transparent p-6 text-sm text-ink/42">
+    <div className="flex min-h-[180px] items-center justify-center border-t border-line/60 bg-transparent p-6 text-sm text-ink/65">
       {text}
     </div>
   );

@@ -148,7 +148,7 @@ export function Sidebar({
                 </div>
                 <div className="space-y-0.5">
                   {getChildFolders(folders).length === 0 ? (
-                    <div className="rounded-[8px] border border-dashed border-line bg-panel/55 px-3 py-4 text-xs leading-5 text-ink/42">
+                    <div className="rounded-[8px] border border-dashed border-line bg-panel/55 px-3 py-4 text-xs leading-5 text-ink/70">
                       还没有项目目录。点击上方加号，先建一个安放资料的地方。
                     </div>
                   ) : getChildFolders(folders).map((folder) => (
@@ -330,7 +330,7 @@ function LibraryGlobalRail({
       <div
         className="mb-4 flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border border-line text-ink/70"
         title="Daymark"
-        aria-label="Daymark"
+        aria-hidden="true"
       >
         <Layers3 size={18} />
       </div>
@@ -540,12 +540,18 @@ function FolderRow({
         data-folder-depth={Math.min(depth, 2)}
         style={{ paddingLeft: `${depth * 12 + 2}px` }}
       >
-        <button
-          className="flex h-7 w-5 items-center justify-center rounded-[6px]"
-          onClick={() => (hasChildren ? onToggle(folder.id) : onSelectView({ kind: "folder", folderId: folder.id }))}
-        >
-          {hasChildren ? open ? <ChevronDown size={14} /> : <ChevronRight size={14} /> : <span className="w-3" />}
-        </button>
+        {hasChildren ? (
+          <button
+            className="flex h-7 w-5 items-center justify-center rounded-[6px]"
+            onClick={() => onToggle(folder.id)}
+            aria-label={`${open ? "收起" : "展开"}目录 ${folder.title}`}
+            aria-expanded={open}
+          >
+            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+        ) : (
+          <span className="flex h-7 w-5 items-center justify-center" aria-hidden="true"><span className="w-3" /></span>
+        )}
         <button
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
           onDoubleClick={() => onRenameFolder(folder)}

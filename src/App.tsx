@@ -106,6 +106,7 @@ import { useMainWindowMaximized } from "./hooks/useMainWindowMaximized";
 import { getSafeErrorMessage } from "./lib/redaction";
 import { markOnboardingCompleted, shouldShowOnboarding } from "./lib/onboarding";
 import { shouldOpenFirstRunGuide } from "./lib/startup";
+import { buildTodayDashboardData, withStartupTimeout, type AsyncResource } from "./lib/todayDashboard";
 import {
   markConversationDateIndexUserScanCompleted,
   pauseConversationDateIndexCompletion,
@@ -661,6 +662,7 @@ export default function App() {
   const [foregroundWorkspace, setForegroundWorkspace] = useState<ForegroundWorkspace>(null);
   const [links, setLinks] = useState<KnowledgeLink[]>([]);
   const [todayDashboard, setTodayDashboard] = useState<TodayDashboardData | null>(null);
+  const [todayDashboardResource, setTodayDashboardResource] = useState<AsyncResource<TodayDashboardData>>({ status: "loading" });
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const [autoWorkReviewSettings, setAutoWorkReviewSettings] = useState<AutoWorkReviewSettings | null>(null);
   const [rollingWorkReview, setRollingWorkReview] = useState<RollingWorkReview | null>(null);
@@ -855,8 +857,31 @@ export default function App() {
   const applyTodayDashboardIfCurrent = (seq: number, dashboard: TodayDashboardData) => {
     if (todayDashboardSeqRef.current === seq) {
       setTodayDashboard(dashboard);
+      setTodayDashboardResource({ status: "ready", data: dashboard });
     }
   };
+
+  const retryTodayDashboard = useCallback(() => {
+    const dashboardSeq = nextTodayDashboardSeq();
+    setTodayDashboardResource((current) => current.data ? { status: "refreshing", data: current.data } : { status: "loading" });
+    void Promise.all([
+      withStartupTimeout(getItems(), "资料"),
+      withStartupTimeout(getJournalEntries(), "日志"),
+      withStartupTimeout(getMemoryCards(), "记忆"),
+    ]).then(([loadedItems, loadedJournal, loadedMemories]) => {
+      setItems(loadedItems);
+      setJournalEntries(loadedJournal);
+      setMemoryCards(loadedMemories);
+      applyTodayDashboardIfCurrent(dashboardSeq, buildTodayDashboardData(loadedItems, loadedJournal, loadedMemories));
+    }).catch((retryError) => {
+      if (todayDashboardSeqRef.current !== dashboardSeq) return;
+      setTodayDashboardResource((current) => ({
+        status: "failed",
+        ...(current.data ? { data: current.data } : {}),
+        message: getSafeErrorMessage(retryError, "重新加载失败，请稍后再试。"),
+      }));
+    });
+  }, []);
 
   const nextMemorySharedSeq = () => {
     memorySharedSeqRef.current += 1;
@@ -889,79 +914,98 @@ export default function App() {
     let mounted = true;
 
     async function loadData() {
-      try {
-        await seedDemoDataInDevIfEnabled();
-        await initializeDemoLibraryForFirstRun();
-        const dashboardSeq = nextTodayDashboardSeq();
-        const memorySharedSeq = nextMemorySharedSeq();
-        const todayKey = toDateKey(new Date());
-        const [
-          loadedItems,
-          loadedFolders,
-          loadedSettingsResult,
-          loadedAutoWorkReviewSettings,
-          loadedRollingWorkReviews,
-          loadedJournal,
-          loadedReports,
-          loadedMemories,
-          loadedMemoryDocument,
-          loadedMemoryPatchDrafts,
-          loadedCodexReviews,
-          loadedCodexSessionIndex,
-          loadedDailyReviewDrafts,
-          loadedConversationGenerationDrafts,
-          loadedLinks,
-          loadedDashboard,
-        ] =
-          await Promise.all([
-            getItems(),
-            getFolders(),
-            loadAiSettingsWithSecrets(),
-            getAutoWorkReviewSettings(),
-            getRollingWorkReviews(),
-            getJournalEntries(),
-            getSummaryReports(),
-            getMemoryCards(),
-            getMemoryDocument(),
-            getMemoryPatchDrafts(),
-            getCodexDailyReviews(),
-            getCodexSessionIndex(),
-            getDailyReviewReplacementDrafts(),
-            getConversationGenerationDrafts(),
-            getKnowledgeLinks(),
-            getTodayDashboardData(),
-          ]);
+      const dashboardSeq = nextTodayDashboardSeq();
+      const memorySharedSeq = nextMemorySharedSeq();
+      const todayKey = toDateKey(new Date());
+      const traceStartup = (stage: string, outcome: "ready" | "failed", startedAt: number) => {
+        if (!import.meta.env.DEV || !globalThis.location.search.includes("qa-startup-trace")) return;
+        console.info("[daymark:qa-startup]", { stage, outcome, elapsedMs: Math.round(performance.now() - startedAt) });
+      };
+      const start = performance.now();
+      setTodayDashboardResource((current) => current.data ? { status: "refreshing", data: current.data } : { status: "loading" });
 
-        if (!mounted) return;
-        setItems(loadedItems);
-        setFolders(loadedFolders);
-        setDemoLibraryState(await getDemoLibraryState());
-        setSettings(loadedSettingsResult.settings);
-        setAutoWorkReviewSettings(loadedAutoWorkReviewSettings);
-        setRollingWorkReviews(loadedRollingWorkReviews);
-        setRollingWorkReview(loadedRollingWorkReviews.find((review) => review.date === todayKey) ?? null);
-        applyAppearancePreference();
-        if (loadedSettingsResult.notice) setError(loadedSettingsResult.notice);
-        setJournalEntries(loadedJournal);
-        setSummaryReports(loadedReports);
-        applyMemorySharedDataIfCurrent(memorySharedSeq, {
-          loadedMemories,
-          loadedMemoryDocument,
-          loadedMemoryPatchDrafts,
-          loadedCodexReviews,
-          loadedCodexSessionIndex,
-          loadedDailyReviewDrafts,
-          loadedConversationGenerationDrafts,
-        });
-        setLinks(loadedLinks);
-        applyTodayDashboardIfCurrent(dashboardSeq, loadedDashboard);
-        setSelectedId("");
-      } catch (loadError) {
-        if (!mounted) return;
-        setError(getSafeErrorMessage(loadError, "加载数据失败。"));
-      } finally {
-        if (mounted) setLoading(false);
+      try {
+        await withStartupTimeout(seedDemoDataInDevIfEnabled(), "示例资料初始化");
+        await withStartupTimeout(initializeDemoLibraryForFirstRun(), "资料库初始化");
+      } catch (startupError) {
+        if (mounted) setError(getSafeErrorMessage(startupError, "初始化失败，可继续使用已有资料。"));
       }
+
+      const results = await Promise.allSettled([
+        withStartupTimeout(getItems(), "资料"),
+        withStartupTimeout(getFolders(), "目录"),
+        withStartupTimeout(getJournalEntries(), "日志"),
+        withStartupTimeout(getMemoryCards(), "记忆"),
+        withStartupTimeout(getSummaryReports(), "总结"),
+        withStartupTimeout(getMemoryDocument(), "长期记忆"),
+        withStartupTimeout(getMemoryPatchDrafts(), "记忆审核"),
+        withStartupTimeout(getCodexDailyReviews(), "回顾档案"),
+        withStartupTimeout(getCodexSessionIndex(), "会话索引"),
+        withStartupTimeout(getDailyReviewReplacementDrafts(), "回顾草稿"),
+        withStartupTimeout(getConversationGenerationDrafts(), "生成任务"),
+        withStartupTimeout(getKnowledgeLinks(), "资料关联"),
+        withStartupTimeout(getAutoWorkReviewSettings(), "自动回顾设置"),
+        withStartupTimeout(getRollingWorkReviews(), "自动回顾"),
+      ]);
+      if (!mounted) return;
+      function valueAt<T>(index: number, fallback: T): T {
+        const result = results[index];
+        return result?.status === "fulfilled" ? result.value as T : fallback;
+      }
+      const loadedItems = valueAt<Item[]>(0, []);
+      const loadedJournal = valueAt<JournalEntry[]>(2, []);
+      const loadedMemories = valueAt<MemoryCard[]>(3, []);
+      const dashboard = buildTodayDashboardData(loadedItems, loadedJournal, loadedMemories);
+      setItems(loadedItems);
+      setFolders(valueAt<FolderNode[]>(1, []));
+      setJournalEntries(loadedJournal);
+      setSummaryReports(valueAt<SummaryReport[]>(4, []));
+      applyMemorySharedDataIfCurrent(memorySharedSeq, {
+        loadedMemories,
+        loadedMemoryDocument: valueAt<MemoryDocument | null>(5, null),
+        loadedMemoryPatchDrafts: valueAt<MemoryPatchDraft[]>(6, []),
+        loadedCodexReviews: valueAt<DailyConversationReview[]>(7, []),
+        loadedCodexSessionIndex: valueAt<ConversationSessionIndex[]>(8, []),
+        loadedDailyReviewDrafts: valueAt<DailyReviewReplacementDraft[]>(9, []),
+        loadedConversationGenerationDrafts: valueAt<ConversationGenerationDraft[]>(10, []),
+      });
+      setLinks(valueAt<KnowledgeLink[]>(11, []));
+      const loadedRollingWorkReviews = valueAt<RollingWorkReview[]>(13, []);
+      setAutoWorkReviewSettings(valueAt<AutoWorkReviewSettings | null>(12, null));
+      setRollingWorkReviews(loadedRollingWorkReviews);
+      setRollingWorkReview(loadedRollingWorkReviews.find((review) => review.date === todayKey) ?? null);
+      const dashboardInputsFailed = [0, 2, 3].every((index) => results[index]?.status === "rejected");
+      if (dashboardInputsFailed) {
+        setTodayDashboardResource({
+          status: "failed",
+          message: "资料、日志和记忆暂时无法读取，请重新加载。",
+        });
+      } else {
+        applyTodayDashboardIfCurrent(dashboardSeq, dashboard);
+      }
+      setSelectedId("");
+      void getDemoLibraryState().then((state) => mounted && setDemoLibraryState(state)).catch(() => undefined);
+      applyAppearancePreference();
+
+      const failed = results.filter((result) => result.status === "rejected");
+      if (failed.length > 0) {
+        setError("部分本地内容暂时未加载，可重新加载后再试。");
+        traceStartup("core-data", "failed", start);
+      } else {
+        traceStartup("core-data", "ready", start);
+      }
+      // Credentials are optional startup metadata: never let a keychain error block the app shell.
+      void withStartupTimeout(loadAiSettingsWithSecrets(), "AI 设置")
+        .then((loaded) => {
+          if (!mounted) return;
+          setSettings(loaded.settings);
+          if (loaded.notice) setError(loaded.notice);
+          traceStartup("ai-settings", "ready", start);
+        })
+        .catch(() => {
+          if (mounted) traceStartup("ai-settings", "failed", start);
+        });
+      if (mounted) setLoading(false);
     }
 
     loadData();
@@ -3795,14 +3839,14 @@ export default function App() {
 
   if (!startupComplete) {
     return (
-      <main className="app-shell">
+      <div className="app-shell">
         <StartupScreen ready={!loading} onComplete={handleStartupComplete} />
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="app-shell">
+    <div className="app-shell">
       <MainWindowTitleBar maximized={mainWindowMaximized} />
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <Sidebar
@@ -3854,6 +3898,8 @@ export default function App() {
             <TodayPage
               data={todayDashboard}
               loading={loading}
+              dashboardResource={todayDashboardResource}
+              onRetryDashboard={retryTodayDashboard}
               focusComposerRequest={todayComposerFocusRequest}
               settings={settings}
               autoWorkReviewSettings={autoWorkReviewSettings}
@@ -4306,7 +4352,7 @@ export default function App() {
           {quickCaptureNotice}
         </div>
       )}
-    </main>
+    </div>
   );
 }
 

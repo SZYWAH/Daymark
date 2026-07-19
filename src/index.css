@@ -301,7 +301,7 @@
   --color-sidebar: 229 235 230;
   --color-line: 205 214 207;
   --color-moss: 63 118 88;
-  --color-copper: 171 119 77;
+  --color-copper: 142 88 48;
   --color-lake: 95 122 113;
   --app-bg: #f4f6f3;
   --selection-bg: rgba(63, 118, 88, 0.17);
@@ -616,7 +616,7 @@ button {
   }
 
   .ghost-action {
-    @apply rounded-[8px] border border-transparent bg-transparent px-3 text-sm text-ink/60 transition hover:border-line hover:bg-surface/60 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
+    @apply rounded-[8px] border border-transparent bg-transparent px-3 text-sm text-ink/75 transition hover:border-line hover:bg-surface/60 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .reader-ai-action-button {
@@ -724,7 +724,7 @@ button {
   }
 
   .nav-count {
-    @apply rounded-full bg-surface/80 px-1.5 py-0.5 text-xs text-ink/50;
+    @apply rounded-full bg-surface/80 px-1.5 py-0.5 text-xs text-ink/70;
   }
 
   .nav-count-active {
@@ -1176,7 +1176,7 @@ button {
   }
 
   .home-shortcut {
-    @apply flex h-8 items-center gap-2 rounded-full border border-line bg-transparent px-3 text-xs text-ink/50 transition hover:border-white/25 hover:bg-white/[0.035] hover:text-ink;
+    @apply flex h-8 items-center gap-2 rounded-full border border-line bg-transparent px-3 text-xs text-ink/70 transition hover:border-white/25 hover:bg-white/[0.035] hover:text-ink;
   }
 
   .home-shortcut-active {

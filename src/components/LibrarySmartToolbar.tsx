@@ -48,7 +48,7 @@ export function LibrarySmartToolbar({
           >
             <Icon size={15} />
             <span>{view.label}</span>
-            <span className={`text-[11px] ${active ? "text-ink/45" : "hidden text-ink/32 xl:inline"}`}>
+            <span className={`text-[11px] ${active ? "text-ink/68" : "hidden text-ink/32 xl:inline"}`}>
               {counts[view.id]}
             </span>
           </button>

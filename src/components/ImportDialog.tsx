@@ -6,6 +6,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { SelectMenu } from "./SelectMenu";
 import { isDesktopRuntime, pickLocalFiles, pickLocalFolder } from "../lib/desktop";
 import { getSafeErrorMessage } from "../lib/redaction";
+import { useModalFocusTrap } from "../hooks/useModalFocusTrap";
 import { READING_STATUSES, type FolderNode, type ItemType, type ReadingStatus } from "../types";
 
 export type ImportMode = "card" | "url" | "file" | "folder";
@@ -70,6 +71,7 @@ export function ImportDialog({
   const [saving, setSaving] = useState(false);
   const [pendingDiscard, setPendingDiscard] = useState<"close" | "batch" | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const savingRef = useRef(false);
   const desktop = isDesktopRuntime();
   const batchMode = batchDrafts.length > 0;
@@ -125,14 +127,11 @@ export function ImportDialog({
     });
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !saving) close();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, saving]);
+  useModalFocusTrap(open, dialogRef, {
+    initialFocusRef: closeButtonRef,
+    suspend: Boolean(pendingDiscard),
+    onEscape: saving ? undefined : () => close(),
+  });
 
   const readingOptions = useMemo(
     () => READING_STATUSES.map((status) => ({ value: status, label: status })),
@@ -277,6 +276,7 @@ export function ImportDialog({
             className="soft-button icon-action-standard"
             disabled={saving}
             onClick={() => close()}
+            ref={closeButtonRef}
             aria-label="关闭导入资料"
             title="关闭"
           >

@@ -54,6 +54,7 @@ export function ItemList({
   const searchRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     const cards = listRef.current?.querySelectorAll(".item-card");
     if (!cards?.length) return;
 
@@ -202,11 +203,11 @@ function LibraryContextHeader({
       : getViewTitle(activeView, folders);
 
   return (
-    <div className="flex min-w-[200px] flex-1 flex-wrap items-center justify-between gap-2 text-[11px] text-ink/55">
+    <div className="flex min-w-[200px] flex-1 flex-wrap items-center justify-between gap-2 text-[11px] text-ink/68">
       <span className="truncate">
         当前位置：<span className="font-medium text-ink/70">{path}</span>
       </span>
-      <span className="font-medium text-ink/55">{count} 条资料</span>
+      <span className="font-medium text-ink/68">{count} 条资料</span>
     </div>
   );
 }
@@ -229,21 +230,13 @@ function ItemCard({
   const folderPath = getFolderPath(folders, item.folderId).join(" / ") || "未归档";
 
   return (
-    <article
-      role="button"
-      tabIndex={0}
+    <button
+      type="button"
       className={`item-card library-card group type-${item.type} block w-full cursor-pointer px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 ${
         selected ? "selected-card" : ""
       }`}
       onClick={onClick}
       aria-current={selected ? "true" : undefined}
-      aria-selected={selected}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onClick();
-        }
-      }}
     >
       <div className="flex items-center justify-between gap-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -252,7 +245,7 @@ function ItemCard({
           </span>
           <div className="min-w-0 flex-1">
             <h3 className="poetic-heading truncate text-[14px] leading-5">{item.title}</h3>
-            <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-ink/50">
+            <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-ink/64">
               <span className="truncate">{folderPath}</span>
               <span className="shrink-0">更新 {item.updatedAt}</span>
             </div>
@@ -262,11 +255,11 @@ function ItemCard({
           {sourceChanged ? (
             <span className="quiet-chip whitespace-nowrap py-0.5 text-[10px] font-medium text-copper">来源有更新</span>
           ) : null}
-          <span className="text-[11px] text-ink/60">{item.processStatus}</span>
+          <span className="text-[11px] text-ink">{item.processStatus}</span>
           {item.favorite ? <Star size={14} className="fill-copper text-copper" /> : null}
         </div>
       </div>
-    </article>
+    </button>
   );
 }
 
@@ -284,7 +277,7 @@ function EmptyState({
   return (
     <div className="flex h-full min-h-[220px] flex-col items-center justify-center border-t border-line/70 bg-transparent p-6 text-center">
       <p className="text-sm font-semibold text-ink">{title}</p>
-      <p className="mt-2 max-w-[26rem] text-sm leading-6 text-ink/52">{description}</p>
+      <p className="mt-2 max-w-[26rem] text-sm leading-6 text-ink/70">{description}</p>
       {actionLabel && onAction && (
         <button className="secondary-action action-standard mt-5" onClick={onAction}>
           <Plus size={16} />

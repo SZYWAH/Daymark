@@ -81,7 +81,7 @@ export function TopStatusBar({
       <div className="min-w-0">
         <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/42">{eyebrow}</p>
         <div className={`${compact ? "mt-1" : "mt-2"} flex min-w-0 flex-wrap items-end gap-4`}>
-          <h2 className={`min-w-0 font-semibold tracking-normal text-ink ${home ? "text-[18px] lg:text-[22px]" : compact ? "text-[26px] lg:text-[30px]" : "text-[30px] lg:text-[38px]"}`}>{title}</h2>
+          <h1 className={`min-w-0 font-semibold tracking-normal text-ink ${home ? "text-[18px] lg:text-[22px]" : compact ? "text-[26px] lg:text-[30px]" : "text-[30px] lg:text-[38px]"}`}>{title}</h1>
           {meta && <div className="min-w-0 max-w-xs truncate text-sm text-ink/46">{meta}</div>}
         </div>
         {description && <p className={`mt-1 max-w-2xl leading-5 text-ink/46 ${home ? "text-xs" : "text-sm"}`}>{description}</p>}

@@ -275,7 +275,7 @@ export function ItemReader({
       {readerMessage && <div className="shrink-0 border-b border-line/60 px-5 py-2 text-xs text-ink/54">{readerMessage}</div>}
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-paper px-5 pb-24 pt-4 scrollbar-thin lg:pb-4">
-        <main className="mx-auto flex w-full max-w-[1280px] flex-col gap-4">
+        <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-4">
           <ReaderSection icon={FileText} title="阅读">
             <div className="reader-content-body max-h-[min(62vh,720px)] overflow-y-auto pr-1 scrollbar-thin">
               <MarkdownContent
@@ -364,7 +364,7 @@ export function ItemReader({
             onOpenEntity={onOpenEntity}
             onOpenItemReference={onOpenItemReference ?? ((itemId) => onOpenEntity("item", itemId))}
           />
-        </main>
+        </div>
       </div>
 
       <ReviewLibraryUpdateDialog

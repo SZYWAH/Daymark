@@ -400,7 +400,7 @@ function MemorySubViewNav({
   ];
 
   return (
-    <nav className="flex shrink-0 gap-5 overflow-x-auto border-b border-line pb-2 scrollbar-thin">
+    <nav className="flex shrink-0 gap-5 overflow-x-auto border-b border-line pb-2 scrollbar-thin" aria-label="记忆页面分区">
       {items.map(({ id, label, count, icon: Icon }) => {
         const selected = active === id;
         return (
@@ -409,7 +409,7 @@ function MemorySubViewNav({
             className={`flex h-8 shrink-0 items-center gap-2 border-b text-sm transition ${
               selected
                 ? "border-accent text-ink"
-                : "border-transparent text-ink/55 hover:border-line hover:text-ink"
+                : "border-transparent text-ink/70 hover:border-line hover:text-ink"
             }`}
             onClick={() => onChange(id)}
           >
@@ -625,7 +625,7 @@ function MemoryDocumentReadView({ content, compact = true }: { content: string; 
 
   if (blocks.length === 0) {
     return (
-      <div className="flex min-h-[220px] items-center justify-center border-y border-dashed border-line py-10 text-center text-sm leading-6 text-ink/45">
+      <div className="flex min-h-[220px] items-center justify-center border-y border-dashed border-line py-10 text-center text-sm leading-6 text-ink/65">
         还没有长期记忆文档。确认记忆建议后，这里会逐渐成为稳定的个人背景。
       </div>
     );
@@ -884,7 +884,7 @@ function MemoryPatchDraftsPanel({
           <div className="max-w-md">
             <BookOpenText size={24} className="mx-auto text-ink/35" />
             <h4 className="mt-4 text-base font-semibold text-ink">没有待审核建议</h4>
-            <p className="mt-2 text-sm leading-7 text-ink/45">生成工作回顾后，值得长期保留的信息会在这里等待确认。</p>
+            <p className="mt-2 text-sm leading-7 text-ink/65">生成工作回顾后，值得长期保留的信息会在这里等待确认。</p>
           </div>
         </div>
       ) : (
