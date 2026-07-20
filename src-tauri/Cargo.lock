@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "daymark"
-version = "0.1.0-rc.10"
+version = "0.1.0-rc.11"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
